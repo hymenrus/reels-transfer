@@ -55,8 +55,12 @@ def _positive_int(name: str, default: str, minimum: int = 0) -> int:
     return value
 
 
-def load_settings(env_file: str | Path | None = None) -> Settings:
-    """Ayarları okur. env_file verilmezse .env dosyası aranır."""
+def load_settings(
+    env_file: str | Path | None = None,
+    *,
+    require_account_credentials: bool = True,
+) -> Settings:
+    """Ayarları okur; bulut worker'ı IG token/ID'sini kişi bazında sağlayabilir."""
     load_dotenv(env_file) if env_file is not None else load_dotenv()
 
     if os.getenv("CONTENT_RIGHTS_CONFIRMED", "").strip().lower() != "true":
@@ -79,8 +83,8 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         raise ConfigError("PUBLIC_UPLOAD_MODE cloudinary, catbox, tmpfiles veya none olmalı.")
 
     return Settings(
-        access_token=_require("IG_ACCESS_TOKEN"),
-        ig_user_id=_require("IG_USER_ID"),
+        access_token=_require("IG_ACCESS_TOKEN") if require_account_credentials else os.getenv("IG_ACCESS_TOKEN", "").strip(),
+        ig_user_id=_require("IG_USER_ID") if require_account_credentials else os.getenv("IG_USER_ID", "").strip(),
         graph_version=os.getenv("GRAPH_API_VERSION", "v26.0").strip() or "v26.0",
         api_mode=api_mode,
         public_upload_mode=public_upload_mode,

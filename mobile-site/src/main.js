@@ -7,7 +7,7 @@ const root = document.querySelector('#app');
 const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
 });
-const state = { session: null, rows: [], filter: 'all', theme: localStorage.getItem('reelflow-theme') || 'dark', installPrompt: null, busy: false };
+const state = { session: null, rows: [], instagram: null, filter: 'all', theme: localStorage.getItem('reelflow-theme') || 'dark', installPrompt: null, busy: false };
 document.documentElement.dataset.theme = state.theme;
 
 const icon = (name, size = 20) => {
@@ -61,18 +61,19 @@ function renderLogin(message = '') {
         <div class="brand-lockup"><span class="brand-mark">R</span><span>ReelFlow<span class="brand-sub">TRANSFER STUDIO</span></span></div>
         <span class="eyebrow">MOBİL REELS PANELİ</span>
         <h1>Kuyruğun,<br><em>kontrolünde.</em></h1>
-        <p class="muted">E-posta adresini yaz; güvenli giriş bağlantısını gönderelim.</p>
+        <p class="muted">E-postanı yaz. Yeni kullanıcılar kendi hesabını açabilir; giriş bağlantısı e-postana gelir.</p>
         ${message ? `<div class="notice">${escapeHtml(message)}</div>` : ''}
         <form id="login-form" class="stack-form">
           <label for="login-email">E-posta adresi</label>
           <input id="login-email" type="email" required autocomplete="email" placeholder="sen@ornek.com" />
           <button class="button button-primary button-wide" type="submit">Giriş bağlantısı gönder <span>→</span></button>
         </form>
-        <p class="fine-print">E-posta bağlantısı kısa süreli ve tek kullanımlıdır. Bu panel Instagram şifreni istemez.</p>
+        <p class="fine-print">E-posta bağlantısı tek kullanımlıdır. Instagram parolanı ReelFlow'a girmezsin; Instagram'ı Meta'nın güvenli ekranından bağlarsın.</p>
         <div class="auth-foot">Telefon · Tablet · Bilgisayar <span>•</span> PWA desteği</div>
       </section>
     </main>
     <div id="toast-host" class="toast-host" aria-live="polite"></div>`;
+  consumeInstagramCallback();
 }
 
 function renderShell() {
@@ -132,6 +133,7 @@ function renderShell() {
             <article class="panel worker-panel" id="settings-section">
               <div class="panel-heading"><div><span class="eyebrow">YAYIN DURUMU</span><h2>Bulut bağlantıları</h2></div><span class="connection-orb ${PUBLISHER_SETUP_READY ? 'is-ready' : ''}"><i></i></span></div>
               <div class="service-row"><span class="service-logo supabase-logo">S</span><div><strong>Supabase</strong><small>Güvenli kuyruk ve oturum</small></div><span class="service-status good">Bağlı</span></div>
+              <div id="instagram-account-card" class="instagram-account-card"><span class="spinner"></span> Instagram bağlantısı kontrol ediliyor…</div>
               <div class="service-row"><span class="service-logo github-logo">GH</span><div><strong>GitHub Actions</strong><small>Bilgisayar kapalıyken işlem</small></div><span class="service-status ${PUBLISHER_SETUP_READY ? 'good' : 'pending'}">${PUBLISHER_SETUP_READY ? 'Hazır' : 'Kurulum gerekli'}</span></div>
               <div class="worker-note ${PUBLISHER_SETUP_READY ? 'note-ready' : ''}"><span class="note-icon">${PUBLISHER_SETUP_READY ? '✓' : 'i'}</span><p>${PUBLISHER_SETUP_READY ? 'Kuyruktaki içerikler bulut işçisi tarafından sırayla işleniyor.' : 'Arayüz ve kuyruk hazır. Otomatik yayın için GitHub Actions sırları ve Instagram API ayarları henüz bağlanmadı.'}</p></div>
               <div class="worker-interval">${icon('clock', 16)} <span>Kuyrukta tarih/saat ayarı yok — eklenenler sırayla işlenir.</span></div>
@@ -151,6 +153,8 @@ function renderShell() {
     <div id="toast-host" class="toast-host" aria-live="polite"></div>`;
   updateStats();
   renderQueue();
+  renderInstagramAccount();
+  consumeInstagramCallback();
   const input = document.querySelector('#reel-input');
   input?.addEventListener('input', () => updateInputCounter(input.value));
 }
@@ -221,8 +225,118 @@ async function loadQueue(silent = false) {
   renderQueue();
 }
 
+async function loadInstagramAccount() {
+  if (!state.session) return;
+  const { data, error } = await supabase.from('instagram_accounts')
+    .select('instagram_user_id,username,token_expires_at,connected_at,publish_interval_minutes,last_published_at')
+    .eq('user_id', state.session.user.id).maybeSingle();
+  if (error) {
+    state.instagram = null;
+    renderInstagramAccount();
+    toast('Instagram bağlantı durumu alınamadı. Sayfayı yenileyip tekrar dene.', 'error');
+    return;
+  }
+  state.instagram = data || null;
+  renderInstagramAccount();
+}
+
+function renderInstagramAccount() {
+  const card = document.querySelector('#instagram-account-card');
+  if (!card) return;
+  if (state.instagram) {
+    const intervals = [[60, '1 saat'], [180, '3 saat'], [360, '6 saat'], [720, '12 saat'], [1440, '1 gün'], [2880, '2 gün']];
+    const selectedInterval = Number(state.instagram.publish_interval_minutes || 360);
+    const options = intervals.map(([minutes, label]) => `<option value="${minutes}" ${selectedInterval === minutes ? 'selected' : ''}>${label}</option>`).join('');
+    card.innerHTML = `<div class="instagram-account-top"><div class="instagram-account-copy"><span class="ig-connected-mark">✓</span><div><strong>@${escapeHtml(state.instagram.username)}</strong><small>Instagram profesyonel hesabı bağlı · token bitişi ${fmtDate(state.instagram.token_expires_at)}</small></div></div><button id="instagram-disconnect-button" class="mini-button mini-danger">Bağlantıyı kes</button></div><label class="ig-interval-row" for="publish-interval-select"><span><strong>Reels arasındaki süre</strong><small>İlk paylaşım uygun olduğunda gider; sonrakiler bu aralıkla bekler.</small></span><select id="publish-interval-select" class="ig-interval-select" aria-label="Reels arasındaki süre">${options}</select></label>`;
+  } else {
+    card.innerHTML = `<div class="instagram-account-copy"><span class="ig-pending-mark">IG</span><div><strong>Instagram hesabını bağla</strong><small>Business veya Creator hesabı gerekir; kişisel hesap desteklenmez.</small></div></div><button id="instagram-connect-button" class="button button-primary ig-connect-button">${icon('reel', 16)} Hesabımı bağla</button>`;
+  }
+  const addButton = document.querySelector('#add-submit');
+  if (addButton) addButton.disabled = !state.instagram;
+}
+
+async function savePublishInterval(minutes) {
+  const allowed = [60, 180, 360, 720, 1440, 2880];
+  if (!state.session || !allowed.includes(minutes)) return;
+  const select = document.querySelector('#publish-interval-select');
+  if (select) select.disabled = true;
+  const { data, error } = await supabase.from('instagram_accounts')
+    .update({ publish_interval_minutes: minutes })
+    .eq('user_id', state.session.user.id)
+    .select('publish_interval_minutes').maybeSingle();
+  if (error || !data) {
+    toast('Yayın aralığı kaydedilemedi. Tekrar dene.', 'error');
+    await loadInstagramAccount();
+    return;
+  }
+  state.instagram = { ...state.instagram, publish_interval_minutes: data.publish_interval_minutes };
+  renderInstagramAccount();
+  const label = { 60: '1 saat', 180: '3 saat', 360: '6 saat', 720: '12 saat', 1440: '1 gün', 2880: '2 gün' }[minutes];
+  toast(`Reels aralığı ${label} olarak kaydedildi.`, 'success');
+}
+
+async function connectInstagram() {
+  const button = document.querySelector('#instagram-connect-button');
+  if (button) { button.disabled = true; button.textContent = 'Güvenli bağlantı açılıyor…'; }
+  const { data, error } = await supabase.functions.invoke('instagram-oauth-start', { body: {} });
+  if (error || data?.error || !data?.authorization_url) {
+    let message = data?.error || error?.message || 'Instagram bağlantısı başlatılamadı.';
+    try {
+      const response = error?.context;
+      if (!data?.error && response && typeof response.clone === 'function') {
+        const detail = await response.clone().json();
+        message = detail?.error || message;
+      }
+    } catch { /* Keep the generic safe message. */ }
+    toast(message, 'error');
+    renderInstagramAccount();
+    return;
+  }
+  window.location.assign(data.authorization_url);
+}
+
+async function disconnectInstagram() {
+  const button = document.querySelector('#instagram-disconnect-button');
+  if (button) { button.disabled = true; button.textContent = 'Kaldırılıyor…'; }
+  const { data, error } = await supabase.functions.invoke('instagram-disconnect', { body: {} });
+  if (error || data?.error) {
+    toast('Instagram bağlantısı kaldırılamadı. Tekrar dene.', 'error');
+    renderInstagramAccount();
+    return;
+  }
+  state.instagram = null;
+  renderInstagramAccount();
+  toast('Instagram hesabının bağlantısı kesildi.', 'success');
+}
+
+function consumeInstagramCallback() {
+  const url = new URL(window.location.href);
+  const result = url.searchParams.get('instagram');
+  if (!result) return;
+  url.searchParams.delete('instagram');
+  window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+  const messages = {
+    connected: ['Instagram hesabın bağlandı.', 'success'],
+    cancelled: ['Instagram bağlantısını iptal ettin.', 'info'],
+    setup_required: ['Instagram bağlantısı henüz hazır değil; site yöneticisinin Meta App ayarlarını tamamlaması gerekiyor.', 'warn'],
+    permissions_missing: ['Yayın için gerekli Instagram izinleri verilmedi.', 'warn'],
+    account_already_linked: ['Bu Instagram hesabı başka bir ReelFlow hesabına bağlı veya bağlantı kaydedilemedi.', 'error'],
+    state_invalid: ['Güvenli bağlantı süresi doldu. Yeniden bağlanmayı dene.', 'error'],
+    token_exchange_failed: ['Meta giriş kodu doğrulanamadı. Yeniden bağlanmayı dene.', 'error'],
+    long_token_failed: ['Instagram erişimi güvenli şekilde uzatılamadı.', 'error'],
+    profile_lookup_failed: ['Instagram profesyonel hesap bilgisi alınamadı.', 'error'],
+    connection_failed: ['Instagram bağlantısı tamamlanamadı.', 'error'],
+  };
+  const [message, type] = messages[result] || ['Instagram bağlantısı tamamlanamadı.', 'error'];
+  toast(message, type);
+}
+
 async function addToQueue(form) {
   if (state.busy) return;
+  if (!state.instagram) {
+    toast('Önce kendi Instagram profesyonel hesabını bağla.', 'warn');
+    return;
+  }
   const textarea = form.querySelector('#reel-input');
   const rights = form.querySelector('#rights-confirm');
   const parsed = parseReelLines(textarea.value);
@@ -279,6 +393,14 @@ async function handleClick(event) {
   if (!button) return;
   if (button.matches('.signout')) {
     await supabase.auth.signOut();
+    return;
+  }
+  if (button.id === 'instagram-connect-button') {
+    await connectInstagram();
+    return;
+  }
+  if (button.id === 'instagram-disconnect-button') {
+    await disconnectInstagram();
     return;
   }
   if (button.id === 'theme-button') {
@@ -355,12 +477,15 @@ root.addEventListener('submit', async (event) => {
     button.textContent = 'Bağlantı gönderiliyor…';
     const { error } = await supabase.auth.signInWithOtp({
       email,
-      options: { shouldCreateUser: false, emailRedirectTo: window.location.href },
+      options: { shouldCreateUser: true, emailRedirectTo: window.location.href },
     });
     if (error) {
       button.disabled = false;
       button.innerHTML = 'Giriş bağlantısı gönder <span>→</span>';
-      toast(`Giriş bağlantısı gönderilemedi: ${error.message}`, 'error');
+      const message = /signup.*not allowed|signups.*disabled/i.test(error.message)
+        ? 'Kendi kendine kayıt Supabase Auth ayarlarında kapalı. Proje yöneticisi e-posta kayıtlarını açmalı.'
+        : `Giriş bağlantısı gönderilemedi: ${error.message}`;
+      toast(message, 'error');
     } else {
       renderLogin('Giriş bağlantısı e-posta adresine gönderildi. Gelen kutunu kontrol et.');
     }
@@ -373,15 +498,21 @@ root.addEventListener('submit', async (event) => {
 root.addEventListener('input', (event) => {
   if (event.target.id === 'queue-search') renderQueue();
 });
+root.addEventListener('change', async (event) => {
+  if (event.target.id === 'publish-interval-select') await savePublishInterval(Number(event.target.value));
+});
 
 supabase.auth.onAuthStateChange((_event, session) => {
   if (session?.user) {
     state.session = session;
+    state.instagram = null;
     renderShell();
+    loadInstagramAccount();
     loadQueue();
   } else if (!session) {
     state.session = null;
     state.rows = [];
+    state.instagram = null;
     renderLogin();
   }
 });
@@ -389,7 +520,9 @@ supabase.auth.onAuthStateChange((_event, session) => {
   const { data: { session } } = await supabase.auth.getSession();
   if (session?.user) {
     state.session = session;
+    state.instagram = null;
     renderShell();
+    await loadInstagramAccount();
     await loadQueue();
   } else {
     renderLogin();

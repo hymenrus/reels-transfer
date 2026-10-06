@@ -69,9 +69,9 @@ Windows'ta `arayuz.bat` dosyasına çift tıklayabilirsin.
 
 ## Web paneli: telefon, tablet ve bilgisayar
 
-`mobile-site/` klasöründe Supabase kuyruğuna bağlanan, yüklenebilir PWA paneli bulunur. Aynı arayüz Android/iOS tarayıcılarında, tabletlerde ve masaüstü tarayıcılarda duyarlı çalışır; ana ekrana eklenebilir. Reel linklerini yapıştırabilir, shortcode tekrarlarını otomatik atlatabilir ve yayın durumunu yüzde/aşama olarak izleyebilirsin. **Web panelinde Reel başına gün/saat ayarı yoktur**; sıradaki içerikleri bulut işçisi işler.
+`mobile-site/` klasöründe Supabase kuyruğuna bağlanan, yüklenebilir PWA paneli bulunur. Aynı arayüz Android/iOS tarayıcılarında, tabletlerde ve masaüstü tarayıcılarda duyarlı çalışır; ana ekrana eklenebilir. Her kullanıcı kendi e-postasıyla kayıt olup kendi Instagram Business/Creator hesabını Meta OAuth üzerinden bağlayabilir; kuyruk ve tokenlar kullanıcı başına izole edilir. Reel linklerini yapıştırabilir, shortcode tekrarlarını otomatik atlatabilir ve yayın durumunu yüzde/aşama olarak izleyebilirsin. Kullanıcı hesabı için Reels'ler arasındaki minimum aralık ayarlanabilir; Reel başına kesin tarih/saat randevusu yoktur.
 
-Panelin kurulumu için [`mobile-site/README.md`](mobile-site/README.md) dosyasına bak. Canlı adres: [https://hymenrus.github.io/reels-transfer/](https://hymenrus.github.io/reels-transfer/). Gerçek Instagram yayıncılığı için GitHub Actions secrets/variables ve Supabase Auth yönlendirme adresi yapılandırılmalıdır.
+Panelin kurulum adımları, Meta App gereksinimleri ve GitHub Actions secrets için [`mobile-site/README.md`](mobile-site/README.md) dosyasına bak. Canlı adres: [https://hymenrus.github.io/reels-transfer/](https://hymenrus.github.io/reels-transfer/). Instagram Developer App/izinleri henüz eklenmeden OAuth ile gerçek yayın yapılamaz.
 
 ## Kurulum
 

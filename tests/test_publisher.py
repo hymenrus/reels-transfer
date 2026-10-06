@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 import requests
 
-from reels_transfer.publisher import InstagramApiError, InstagramPublisher
+from reels_transfer.publisher import InstagramApiError, InstagramPublisher, refresh_long_lived_token
 
 
 class FakeResponse:
@@ -198,3 +198,30 @@ def test_catbox_upload_returns_direct_url(tmp_path: Path) -> None:
 
     publisher = make_instagram_login_publisher(UploadSession([]), public_upload_mode="catbox")
     assert publisher.upload_public_video(video) == "https://files.catbox.moe/example.mp4"
+
+
+def test_refresh_long_lived_token_uses_instagram_refresh_endpoint() -> None:
+    class RefreshSession:
+        def __init__(self, response: FakeResponse) -> None:
+            self.response = response
+            self.calls = []
+
+        def get(self, url: str, **kwargs):
+            self.calls.append((url, kwargs))
+            return self.response
+
+    session = RefreshSession(FakeResponse({"access_token": "NEW-TOKEN", "expires_in": 5183944}))
+    assert refresh_long_lived_token("OLD-TOKEN", session) == ("NEW-TOKEN", 5183944)
+    url, kwargs = session.calls[0]
+    assert url.endswith("/refresh_access_token")
+    assert kwargs["params"] == {"grant_type": "ig_refresh_token", "access_token": "OLD-TOKEN"}
+
+
+def test_refresh_error_does_not_leak_access_token() -> None:
+    class RefreshSession:
+        def get(self, url: str, **kwargs):
+            return FakeResponse({"error": {"message": "invalid OLD-TOKEN"}}, status_code=400)
+
+    with pytest.raises(InstagramApiError) as excinfo:
+        refresh_long_lived_token("OLD-TOKEN", RefreshSession())
+    assert "OLD-TOKEN" not in str(excinfo.value)

@@ -219,3 +219,36 @@ class InstagramPublisher:
         self.upload_video(upload_uri, video_path)
         self.wait_until_ready(container_id)
         return self.publish_container(container_id)
+
+
+def refresh_long_lived_token(
+    access_token: str,
+    session: requests.Session | None = None,
+) -> tuple[str, int]:
+    """Instagram Login long-lived tokenını 60 güne kadar yenile; URL/yanıtı loglama."""
+    client = session or requests.Session()
+    try:
+        response = client.get(
+            f"{INSTAGRAM_GRAPH_HOST}/refresh_access_token",
+            params={"grant_type": "ig_refresh_token", "access_token": access_token},
+            timeout=30,
+        )
+    except requests.RequestException as exc:
+        raise InstagramApiError(f"Instagram token yenileme ağ hatası: {type(exc).__name__}") from exc
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {}
+    if not response.ok or payload.get("error"):
+        detail = payload.get("error")
+        detail = detail.get("message", "Meta tokenı yenilemedi.") if isinstance(detail, dict) else detail
+        safe_detail = str(detail or "Meta tokenı yenilemedi.").replace(access_token, "[TOKEN]")
+        raise InstagramApiError(f"Instagram token yenilenemedi: {safe_detail[:300]}")
+    new_token = str(payload.get("access_token") or "")
+    try:
+        expires_in = int(payload.get("expires_in") or 0)
+    except (TypeError, ValueError):
+        expires_in = 0
+    if not new_token or expires_in < 3600:
+        raise InstagramApiError("Instagram token yenileme yanıtı eksik veya geçersiz.")
+    return new_token, expires_in

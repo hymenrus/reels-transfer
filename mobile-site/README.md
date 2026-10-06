@@ -1,29 +1,35 @@
-# ReelFlow — mobil Reels kuyruğu
+# ReelFlow — çok kullanıcılı mobil Reels kuyruğu
 
-Reels Transfer masaüstü projesine eklenen; telefon, tablet ve masaüstü tarayıcılarında çalışan, ana ekrana kurulabilen PWA arayüzü. **Kullanıcıya Reel başına saat/gün planı sunmaz:** eklenen videolar sıraya girer ve bulut işçisi sırayla işler.
+Telefon, tablet ve masaüstü tarayıcılarında çalışan; ana ekrana kurulabilen PWA paneli. Her kullanıcı kendi e-posta hesabını açar, kendi Instagram profesyonel hesabını Meta'nın OAuth ekranından bağlar ve yalnızca kendi kuyruğundan yayın yapar. Kullanıcı, hesabı bağladıktan sonra yayınlanan Reels'ler arasındaki minimum aralığı seçebilir; içerikler kuyruğa göre sırayla işlenir.
 
 **Canlı panel:** [https://hymenrus.github.io/reels-transfer/](https://hymenrus.github.io/reels-transfer/)
 
 ## Özellikler
 
-- Türkçe, duyarlı (responsive) arayüz; küçük ekranlarda alt gezinme, geniş ekranda kenar menüsü.
-- PWA manifesti, ana ekrana ekleme düğmesi ve statik arayüz için çevrimdışı önbellek.
-- Koyu/açık tema düğmesi ve cihazda saklanan tercih; hareket azaltma erişilebilirlik ayarına saygı.
-- Supabase e-posta magic-link girişi; sadece giriş yapan kullanıcı kendi kuyruğunu görür.
-- Satır satır Reel linki, `URL | açıklama` biçimi, panodan yapıştırma ve anlık URL doğrulama.
-- Aynı Reel shortcode'u daha önce sıradaysa, başarısız olduysa, iptal edildiyse veya yayınlandıysa tekrar eklenmez.
-- Kuyruk filtreleri/arama, sayaçlar, durum ve yüzde ilerlemesi; başarısız işi tekrar deneme ve kuyruktan çıkarma.
-- Paylaşım hakkı onayı alınmadan yeni kayıt veritabanına eklenmez.
-- Instagram erişim anahtarı ve Supabase service-role anahtarı tarayıcı paketinde bulunmaz.
+- Türkçe, duyarlı arayüz; küçük ekranda alt gezinme, geniş ekranda kenar menüsü.
+- PWA kurulumu, statik arayüz için çevrimdışı önbellek, koyu/açık tema ve azaltılmış hareket desteği.
+- E-posta magic-link ile oturum açma ve yeni kullanıcıların kendi kendine kaydı (Supabase Auth'ta sign-up açık olmalı).
+- Her kullanıcının kendi Instagram Business/Creator hesabını Meta OAuth üzerinden bağlaması ve gerektiğinde bağlantıyı kesmesi.
+- Hesap başına Reels aralığı: 1 saat, 3 saat, 6 saat, 12 saat, 1 gün veya 2 gün; varsayılan 6 saattir.
+- Her hesaba özel, sunucu tarafında saklanan Instagram tokenı; tarayıcı koduna asla gönderilmez.
+- Kullanıcıya ait queue/RLS, URL doğrulama ve Reel shortcode'una göre tekrar koruması.
+- Arama/filtre, durum ve yüzde ilerlemesi, başarısız işi tekrar deneme ve kuyruktan çıkarma.
+- Paylaşım hakkı onayı alınmadan yeni kayıt eklenmez.
+- GitHub Actions, kullanıcı başına token/kota kullanır; kuyruk sahipliği her işte doğrulanır ve kullanıcılar arasında sırayla işlem yapılır.
 
 ## Parçalar
 
-- `src/` — Vite ile derlenen mobil web arayüzü.
-- `supabase/schema.sql` — RLS etkin tablo, dedupe ve kullanıcıya ait iptal/yeniden dene RPC'leri. Bu şema `reels-mobile` projesine zaten uygulandı.
-- `../.github/workflows/deploy-mobile-site.yml` — GitHub Pages deploy'u.
-- `../.github/workflows/process-reels.yml` ve `../reels_transfer/github_worker.py` — yaklaşık 5 dakikada bir çalışan, kuyruktan **tek** Reel alıp indirip yayımlayan GitHub Actions worker'ı.
+- `src/` — Vite ile derlenen web/PWA arayüzü.
+- `supabase/schema.sql` — yeni kurulum için kuyruk ve Instagram OAuth şeması.
+- `supabase/migrations/202610070001_multi_user_instagram.sql` — mevcut projeye eklenecek kullanıcı başına Instagram hesap/token tabloları.
+- `supabase/migrations/202610070002_secure_instagram_token_policies.sql` — token/state tablolarına service-role-only RLS ve state indeksi.
+- `supabase/migrations/202610070003_publish_interval.sql` — kullanıcıya özel gönderi aralığı ve atomik yayın/cooldown işlemi.
+- `supabase/functions/instagram-oauth-*` — Meta Business Login başlatma ve güvenli callback; `instagram-disconnect` — hesabı ayırma.
+- `../reels_transfer/github_worker.py` — Supabase kuyruğunu kullanıcıya ait Instagram tokenıyla işleyen worker.
+- `../.github/workflows/deploy-mobile-site.yml` — GitHub Pages dağıtımı.
+- `../.github/workflows/process-reels.yml` — yaklaşık 5 dakikada bir kuyruğu kontrol eden worker.
 
-GitHub Actions aralığı sadece bekleyen işi kontrol etmek içindir; tekil Reel'lere planlı gönderim saati eklemez. GitHub'ın zamanlanmış Actions tetikleyicileri en iyi çaba esaslıdır, yoğunlukta gecikebilir veya iş düşebilir. Yani "tam dakika garantisi" değildir.
+GitHub Actions worker'ı yaklaşık 5 dakikada bir kuyruk kontrolü yapar; **bu, her 5 dakikada bir paylaşım yapılacağı anlamına gelmez.** Her kullanıcı için yalnızca seçtiği minimum aralık dolduğunda yeni Reel yayınlanır. İlk yayın uygun olduğunda hemen başlayabilir; sonraki yayınlar seçilen aralıkla ayrılır. Actions tetiklemeleri en iyi çaba esaslıdır; yoğunlukta gecikebilir veya iş düşebilir, tam dakika garantisi yoktur. Kuyruk ilk giren ilk çıkar.
 
 ## Geliştirme
 
@@ -35,28 +41,74 @@ npm run dev
 npm run build
 ```
 
-Önizleme adresi Vite tarafından terminalde gösterilir. Supabase e-posta magic-link girişinde, yerel geliştirme adresini Supabase **Authentication → URL Configuration → Redirect URLs** bölümüne ekleyin. Üretimde `https://hymenrus.github.io/reels-transfer/` adresini de izin listesine ekleyin.
+Yerel geliştirme adresini Supabase **Authentication → URL Configuration → Redirect URLs** listesine ekleyin. Üretim yönlendirme adresi `https://hymenrus.github.io/reels-transfer/` olmalı.
 
-## İlk kullanım ve güvenlik
+## Kurulum: kullanıcı kaydı ve kendi Instagram hesabını bağlama
 
-1. Supabase'te tek yönetici kullanıcı oluşturun (Authentication → Users). Uygulama yeni hesap açmaz; yalnızca önceden oluşturulmuş kullanıcılara magic link yollar.
-2. `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_OWNER_ID`, `IG_ACCESS_TOKEN`, `IG_USER_ID` GitHub depo **Actions secrets** alanına ekleyin. `SUPABASE_SERVICE_ROLE_KEY` ve Instagram tokenı gizlidir; kaynak dosyaya, Pages'e veya issue/log çıktısına koymayın.
-3. Instagram Login ile yerel videoyu Meta'nın okuyabilmesi için `CLOUDINARY_CLOUD_NAME` ve unsigned `CLOUDINARY_UPLOAD_PRESET` secrets'larını da ekleyin. `IG_API_MODE` ve `PUBLIC_UPLOAD_MODE` Actions variables olarak ayarlanabilir. Tokensiz medya indirme, içerik hakkı veya Instagram erişim kısıtlarını aşmaz.
-4. Pages şu anda [https://hymenrus.github.io/reels-transfer/](https://hymenrus.github.io/reels-transfer/) adresinde yayımlanıyor. Dağıtım kaynağı **Settings → Pages → Build and deployment → GitHub Actions** olarak ayarlı.
-5. Repo Variables içine `REEL_WORKER_ENABLED=true` ekleyince bulut işçisi devreye girer; bu değişken yokken iş akışı paylaşım çalıştırmaz.
-6. Siteye magic link ile giriş yapın. URL'leri eklerken içerik paylaşma hakkı kutusunu onaylayın. Worker, GitHub Action secret'ındaki `SUPABASE_OWNER_ID` değerine ait kuyruğu işler.
-7. Secrets/variable'lar tamamlanınca `src/config.js` içindeki `PUBLISHER_SETUP_READY` değerini `true` yapıp Pages build'ini yeniden yayınlayın; bu yalnızca paneldeki bağlantı durumunu gösterir.
+### 1. Supabase kullanıcı kaydını aç
 
-GitHub Pages ve Actions ücretsiz katman sınırları depoya, hesaba ve platform politikalarına göre değişebilir. Supabase Free projeleri düşük etkinlikte duraklatabilir. GitHub Actions scheduled işleri yoğun saatlerde gecikebilir; herkese açık depolardaki zamanlanmış iş akışları 60 gün etkinlik olmazsa kapanabilir. Ücretsiz katmanlar garanti/SLA sağlamaz. Depo ve site herkese açık olduğundan hiçbir secret veya kişisel veri commit etmeyin.
+Magic-link formu `shouldCreateUser: true` kullanır; böylece her kişi kendisi kaydolur, senin tek tek “Add user” yapman gerekmez. Eğer Supabase `Signups not allowed for otp` hatası vermeye devam ederse Supabase Dashboard → **Authentication → Sign In / Providers → Email** bölümünde yeni kullanıcı kayıtlarına izin ver. Uygulamadaki RLS politikaları her kullanıcının kuyruğunu kendi hesabıyla sınırlar.
 
-## Atıf ve kaynak
+Supabase Auth → **URL Configuration** içinde Site URL'yi ve `https://hymenrus.github.io/reels-transfer/` adresini Redirect URLs listesine ekle.
 
-Üst paneldeki soyut görsel [Unsplash'taki bu sayfadan](https://unsplash.com/photos/abstract-purple-and-blue-glowing-curves-background-xP9nBpGYLyA) alınmıştır; görsel varlığı `public/assets/abstract-purple-blue.jpg` dosyasıdır. [Unsplash lisansı](https://unsplash.com/license) ücretsiz kişisel ve ticari kullanıma izin verir; atıf zorunlu değildir.
+### 2. Kullanıcı başına Instagram OAuth veritabanını uygula
 
-- [GitHub Actions schedule tetikleme belgeleri](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows)
-- [Supabase Free project pausing](https://supabase.com/docs/guides/platform/free-project-pausing)
-- [GitHub Pages hakkında](https://docs.github.com/en/pages/getting-started-with-github-pages/what-is-github-pages)
+Mevcut projeye `supabase/migrations/202610070001_multi_user_instagram.sql` migration'ı uygulanmalı. `instagram_accounts` tablosunda kullanıcı yalnızca kendi bağlantı bilgisini okuyabilir; `instagram_credentials` ve OAuth state tabloları anon/authenticated rollerine kapalıdır ve yalnızca server-side service role tarafından kullanılabilir. Instagram tokenları tarayıcıya dönmez.
 
-## Mevcut bağlantı durumu
+`202610070003_publish_interval.sql` migration'ı kullanıcının yalnızca kendi yayın aralığını güncellemesine izin verir; diğer hesap/token alanları server-owned kalır. Seçilen aralık `last_published_at` üzerinden hesaplanır, bu nedenle kullanıcı aralığı değiştirdiğinde yeni değer bekleyen kuyruğa hemen yansır.
 
-Supabase `reels-mobile` projesi `eu-central-1` bölgesinde oluşturuldu ve kuyruk şeması uygulandı. ReelFlow paneli [GitHub Pages'te canlıdır](https://hymenrus.github.io/reels-transfer/). Yayın işçisi arayüzde kurulum bekliyor olarak görünür; Actions secrets/variables ve Supabase Auth yönlendirme adresi tamamlanmadan gerçek Instagram paylaşımı çalıştırılmaz. Instagram Graph API kotası, token süresi ve kaynak videonun herkese açık indirilebilir olması da yayın başarısını etkiler.
+### 3. Meta Developer App oluştur ve onaylat
+
+Bu entegrasyon için Meta Developer App içinde **Instagram API with Instagram Login / Business Login** etkin olmalı. App'te şu OAuth redirect URI'yi birebir kaydet:
+
+```text
+https://fwscsiswefezkyfblres.supabase.co/functions/v1/instagram-oauth-callback
+```
+
+İstenen izinler:
+
+- `instagram_business_basic`
+- `instagram_business_content_publish`
+
+Bağlanacak hesap **Business veya Creator** olmalı; kişisel Instagram hesapları bu yayın API'sinde desteklenmiyor. Uygulamayı ekip dışındaki kişilere açmak için Meta'nın istediği Advanced Access/App Review ve varsa işletme doğrulaması gerekebilir. Meta App henüz oluşturulmamış/kimlik bilgileri sağlanmamışsa “Hesabımı bağla” güvenli biçimde kurulum hatası verir; kullanıcı tokenı istemez.
+
+Supabase Dashboard → **Edge Functions → Secrets** bölümünde aşağıdakileri ayarla:
+
+- `INSTAGRAM_APP_ID`
+- `INSTAGRAM_APP_SECRET` — gizli tut; Pages/GitHub kaynak koduna koyma.
+- `INSTAGRAM_REDIRECT_URI` — yukarıdaki callback adresiyle aynı olmalı.
+- `APP_SITE_URL=https://hymenrus.github.io/reels-transfer/`
+
+Supabase function runtime'ının `SUPABASE_URL`, publishable key ve service-role key erişimi de etkin olmalı. OAuth code exchange ve uzun ömürlü token değişimi yalnızca Edge Function tarafında yapılır. Meta long-lived tokenı yaklaşık 60 gün geçerlidir; worker gerektiğinde yeniler. Kullanıcı bağlantıyı keserse token kaydı silinir.
+
+### 4. GitHub Actions worker sırlarını ekle
+
+GitHub deposunda **Settings → Secrets and variables → Actions → Secrets** alanına:
+
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `CLOUDINARY_CLOUD_NAME`
+- `CLOUDINARY_UPLOAD_PRESET`
+
+ekle. Service-role key ve Cloudinary bilgileri gizlidir; kaynak dosyaya, Pages'e veya loglara koyma. Eski tek-hesap değişkenleri `SUPABASE_OWNER_ID`, `IG_ACCESS_TOKEN`, `IG_USER_ID` artık worker için kullanılmaz. Instagram tokenları kullanıcı bağlandığında Supabase'in özel credentials tablosundan alınır.
+
+Repo **Actions → Variables** alanına, tüm Meta/Supabase/GitHub kurulum ve testleri tamamlandıktan sonra `REEL_WORKER_ENABLED=true` eklenirse zamanlanmış yayın worker'ı etkinleşir. Worker, GitHub Actions üzerinde çalıştığı için kendi bilgisayarının açık kalması gerekmez. Her run en fazla bir Reel işler (workflow varsayılanı); aynı Reel farklı kullanıcıların kendi kuyruklarında bağımsız olabilir. Kurulum tamamlanınca paneldeki durum rozetini göstermek için `mobile-site/src/config.js` içindeki `PUBLISHER_SETUP_READY` değerini `true` yapıp siteyi yeniden dağıt; bu bayrak yalnızca arayüz göstergesidir, sırların yerini tutmaz.
+
+Instagram'ın videoyu alabilmesi için medya kısa süreli herkese açık HTTPS URL'sine yüklenir; bunun için Cloudinary kullanılır. Yalnızca paylaşma hakkına sahip olduğun videoları ekle ve hassas içerik kullanma.
+
+## Mevcut kurulum durumu
+
+Pages arayüzü canlıdır. Bu güncelleme self-signup metnini/akışını, kullanıcı başına Instagram OAuth kodunu, özel token tablolarını ve çok kullanıcılı worker'ı hazırlar. **Meta Developer App henüz yoktur**; bu nedenle OAuth, Meta App ID/Secret ve Meta'nın gerekli erişim onayı eklenmeden gerçek Instagram bağlantısı kuramaz. GitHub Actions secrets da kullanıcı tarafından repo ayarlarından eklenmelidir. Worker `REEL_WORKER_ENABLED=true` değişkeni olmadan yayın yapmaz.
+
+## Kaynaklar
+
+- [Meta Business Login for Instagram](https://developers.facebook.com/documentation/instagram-platform/instagram-api-with-instagram-login/business-login)
+- [Meta Instagram content publishing](https://developers.facebook.com/documentation/instagram-platform/content-publishing)
+- [Supabase Auth settings](https://supabase.com/docs/guides/auth/auth-email-passwordless)
+- [Supabase function secrets](https://supabase.com/docs/guides/functions/secrets)
+- [GitHub Actions scheduled workflows](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows)
+- [GitHub Pages](https://docs.github.com/en/pages/getting-started-with-github-pages/what-is-github-pages)
+
+## Atıf
+
+Üst paneldeki soyut görsel [Unsplash'taki bu sayfadan](https://unsplash.com/photos/abstract-purple-and-blue-glowing-curves-background-xP9nBpGYLyA) alınmıştır; görsel varlığı `public/assets/abstract-purple-blue.jpg` dosyasıdır. [Unsplash lisansı](https://unsplash.com/license) ücretsiz kişisel ve ticari kullanıma izin verir.

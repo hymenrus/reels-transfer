@@ -48,6 +48,13 @@ def test_requires_credentials(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
         load_settings(env_file=tmp_path / "yok.env")
 
 
+def test_worker_settings_allow_per_user_credentials(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    set_env(monkeypatch, IG_ACCESS_TOKEN="", IG_USER_ID="")
+    settings = load_settings(env_file=tmp_path / "yok.env", require_account_credentials=False)
+    assert settings.access_token == ""
+    assert settings.ig_user_id == ""
+
+
 def test_rejects_non_numeric_setting(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     set_env(monkeypatch, MAX_POSTS_PER_RUN="üç")
     with pytest.raises(ConfigError, match="MAX_POSTS_PER_RUN"):
