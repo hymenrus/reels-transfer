@@ -71,7 +71,7 @@ Windows'ta `arayuz.bat` dosyasına çift tıklayabilirsin.
 
 `mobile-site/` klasöründe Supabase kuyruğuna bağlanan, yüklenebilir PWA paneli bulunur. Aynı arayüz Android/iOS tarayıcılarında, tabletlerde ve masaüstü tarayıcılarda duyarlı çalışır; ana ekrana eklenebilir. Reel linklerini yapıştırabilir, shortcode tekrarlarını otomatik atlatabilir ve yayın durumunu yüzde/aşama olarak izleyebilirsin. **Web panelinde Reel başına gün/saat ayarı yoktur**; sıradaki içerikleri bulut işçisi işler.
 
-Panelin kurulumu için [`mobile-site/README.md`](mobile-site/README.md) dosyasına bak. Site henüz GitHub Pages'te yayımlanmadı ve gerçek Instagram yayıncılığı için GitHub Actions secret'ları yapılandırılmalıdır.
+Panelin kurulumu için [`mobile-site/README.md`](mobile-site/README.md) dosyasına bak. Canlı adres: [https://hymenrus.github.io/reels-transfer/](https://hymenrus.github.io/reels-transfer/). Gerçek Instagram yayıncılığı için GitHub Actions secrets/variables ve Supabase Auth yönlendirme adresi yapılandırılmalıdır.
 
 ## Kurulum
 

@@ -2,6 +2,8 @@
 
 Reels Transfer masaüstü projesine eklenen; telefon, tablet ve masaüstü tarayıcılarında çalışan, ana ekrana kurulabilen PWA arayüzü. **Kullanıcıya Reel başına saat/gün planı sunmaz:** eklenen videolar sıraya girer ve bulut işçisi sırayla işler.
 
+**Canlı panel:** [https://hymenrus.github.io/reels-transfer/](https://hymenrus.github.io/reels-transfer/)
+
 ## Özellikler
 
 - Türkçe, duyarlı (responsive) arayüz; küçük ekranlarda alt gezinme, geniş ekranda kenar menüsü.
@@ -33,19 +35,19 @@ npm run dev
 npm run build
 ```
 
-Önizleme adresi Vite tarafından terminalde gösterilir. Supabase e-posta magic-link girişinde, yerel geliştirme adresini Supabase **Authentication → URL Configuration → Redirect URLs** bölümüne ekleyin. Üretimde GitHub Pages adresini de izin listesine ekleyin.
+Önizleme adresi Vite tarafından terminalde gösterilir. Supabase e-posta magic-link girişinde, yerel geliştirme adresini Supabase **Authentication → URL Configuration → Redirect URLs** bölümüne ekleyin. Üretimde `https://hymenrus.github.io/reels-transfer/` adresini de izin listesine ekleyin.
 
 ## İlk kullanım ve güvenlik
 
 1. Supabase'te tek yönetici kullanıcı oluşturun (Authentication → Users). Uygulama yeni hesap açmaz; yalnızca önceden oluşturulmuş kullanıcılara magic link yollar.
 2. `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_OWNER_ID`, `IG_ACCESS_TOKEN`, `IG_USER_ID` GitHub depo **Actions secrets** alanına ekleyin. `SUPABASE_SERVICE_ROLE_KEY` ve Instagram tokenı gizlidir; kaynak dosyaya, Pages'e veya issue/log çıktısına koymayın.
 3. Instagram Login ile yerel videoyu Meta'nın okuyabilmesi için `CLOUDINARY_CLOUD_NAME` ve unsigned `CLOUDINARY_UPLOAD_PRESET` secrets'larını da ekleyin. `IG_API_MODE` ve `PUBLIC_UPLOAD_MODE` Actions variables olarak ayarlanabilir. Tokensiz medya indirme, içerik hakkı veya Instagram erişim kısıtlarını aşmaz.
-4. GitHub deposunda **Settings → Pages → Build and deployment → GitHub Actions** seçin. `main` dalına aktarım Pages ve worker iş akışlarını devreye alır.
+4. Pages şu anda [https://hymenrus.github.io/reels-transfer/](https://hymenrus.github.io/reels-transfer/) adresinde yayımlanıyor. Dağıtım kaynağı **Settings → Pages → Build and deployment → GitHub Actions** olarak ayarlı.
 5. Repo Variables içine `REEL_WORKER_ENABLED=true` ekleyince bulut işçisi devreye girer; bu değişken yokken iş akışı paylaşım çalıştırmaz.
 6. Siteye magic link ile giriş yapın. URL'leri eklerken içerik paylaşma hakkı kutusunu onaylayın. Worker, GitHub Action secret'ındaki `SUPABASE_OWNER_ID` değerine ait kuyruğu işler.
 7. Secrets/variable'lar tamamlanınca `src/config.js` içindeki `PUBLISHER_SETUP_READY` değerini `true` yapıp Pages build'ini yeniden yayınlayın; bu yalnızca paneldeki bağlantı durumunu gösterir.
 
-GitHub Pages için ücretsiz plan koşulları depo görünürlüğüne ve planına göre değişebilir. Ücretsiz Pages hedefleniyorsa kod deposunu herkese açık yapmadan önce görünürlük onayı alın; bu paket tek başına hiçbir depoyu yayımlamaz. Supabase Free projeleri düşük etkinlikte duraklatabilir. GitHub Actions scheduled işleri yoğun saatlerde gecikebilir; herkese açık depolardaki zamanlanmış iş akışları 60 gün etkinlik olmazsa kapanabilir. Ücretsiz katmanlar garanti/SLA sağlamaz.
+GitHub Pages ve Actions ücretsiz katman sınırları depoya, hesaba ve platform politikalarına göre değişebilir. Supabase Free projeleri düşük etkinlikte duraklatabilir. GitHub Actions scheduled işleri yoğun saatlerde gecikebilir; herkese açık depolardaki zamanlanmış iş akışları 60 gün etkinlik olmazsa kapanabilir. Ücretsiz katmanlar garanti/SLA sağlamaz. Depo ve site herkese açık olduğundan hiçbir secret veya kişisel veri commit etmeyin.
 
 ## Atıf ve kaynak
 
@@ -57,4 +59,4 @@ GitHub Pages için ücretsiz plan koşulları depo görünürlüğüne ve planı
 
 ## Mevcut bağlantı durumu
 
-Supabase `reels-mobile` projesi `eu-central-1` bölgesinde oluşturuldu ve kuyruk şeması uygulandı. Bu klasör GitHub Pages'e henüz yayımlanmamıştır. Yayın işçisi arayüzde kurulum bekliyor olarak görünür; Pages depoyu ve yukarıdaki GitHub Actions secrets'larını kurmadan gerçek Instagram paylaşımı çalıştırılmaz. Instagram Graph API kotası, token süresi ve kaynak videonun herkese açık indirilebilir olması da yayın başarısını etkiler.
+Supabase `reels-mobile` projesi `eu-central-1` bölgesinde oluşturuldu ve kuyruk şeması uygulandı. ReelFlow paneli [GitHub Pages'te canlıdır](https://hymenrus.github.io/reels-transfer/). Yayın işçisi arayüzde kurulum bekliyor olarak görünür; Actions secrets/variables ve Supabase Auth yönlendirme adresi tamamlanmadan gerçek Instagram paylaşımı çalıştırılmaz. Instagram Graph API kotası, token süresi ve kaynak videonun herkese açık indirilebilir olması da yayın başarısını etkiler.
