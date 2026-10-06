@@ -280,6 +280,14 @@ async function savePublishInterval(minutes) {
 async function connectInstagram() {
   const button = document.querySelector('#instagram-connect-button');
   if (button) { button.disabled = true; button.textContent = 'Güvenli bağlantı açılıyor…'; }
+  let authWindow = null;
+  try {
+    authWindow = window.open('about:blank', '_blank');
+    if (authWindow) {
+      authWindow.opener = null;
+      authWindow.document.body.textContent = 'Güvenli Instagram giriş ekranı hazırlanıyor…';
+    }
+  } catch { authWindow = null; }
   const { data, error } = await supabase.functions.invoke('instagram-oauth-start', { body: {} });
   if (error || data?.error || !data?.authorization_url) {
     let message = data?.error || error?.message || 'Instagram bağlantısı başlatılamadı.';
@@ -290,11 +298,46 @@ async function connectInstagram() {
         message = detail?.error || message;
       }
     } catch { /* Keep the generic safe message. */ }
+    try { if (authWindow && !authWindow.closed) authWindow.close(); } catch { /* Ignore a closed popup. */ }
     toast(message, 'error');
     renderInstagramAccount();
     return;
   }
-  window.location.assign(data.authorization_url);
+  let authorizationUrl;
+  try {
+    authorizationUrl = new URL(data.authorization_url);
+    if (authorizationUrl.origin !== 'https://www.instagram.com') throw new Error('Unexpected authorization origin');
+  } catch {
+    try { if (authWindow && !authWindow.closed) authWindow.close(); } catch { /* Ignore a closed popup. */ }
+    toast('Güvenli Instagram giriş adresi alınamadı. Tekrar dene.', 'error');
+    renderInstagramAccount();
+    return;
+  }
+  const fallbackLink = document.createElement('a');
+  fallbackLink.href = authorizationUrl.href;
+  fallbackLink.target = '_blank';
+  fallbackLink.rel = 'noopener noreferrer';
+  fallbackLink.className = 'text-button oauth-fallback';
+  fallbackLink.textContent = 'Giriş ekranı açılmadıysa Instagram’ı buradan aç';
+  fallbackLink.hidden = true;
+  document.querySelector('#instagram-account-card')?.append(fallbackLink);
+  try {
+    if (authWindow && !authWindow.closed) {
+      authWindow.location.replace(authorizationUrl.href);
+      authWindow.focus();
+    } else {
+      window.location.assign(authorizationUrl.href);
+    }
+  } catch {
+    window.location.assign(authorizationUrl.href);
+  }
+  setTimeout(() => {
+    if (document.visibilityState !== 'visible' || !button?.isConnected) return;
+    button.disabled = false;
+    button.innerHTML = `${icon('reel', 16)} Hesabımı bağla`;
+    fallbackLink.hidden = false;
+    toast('Giriş ekranı açılmadıysa alttaki bağlantıya dokun.', 'warn');
+  }, 1800);
 }
 
 async function disconnectInstagram() {
@@ -543,4 +586,7 @@ window.addEventListener('beforeinstallprompt', (event) => {
 });
 window.addEventListener('online', () => document.querySelector('.connection-pill')?.classList.remove('is-offline'));
 window.addEventListener('offline', () => document.querySelector('.connection-pill')?.classList.add('is-offline'));
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && state.session) loadInstagramAccount();
+});
 setInterval(() => { if (state.session && !document.hidden) loadQueue(true); }, 15000);
