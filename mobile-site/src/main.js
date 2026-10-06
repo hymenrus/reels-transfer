@@ -120,11 +120,13 @@ function renderShell() {
           <section class="content-grid">
             <article class="panel add-panel" id="add-section">
               <div class="panel-heading"><div><span class="eyebrow">YENİ İÇERİK</span><h2>Kuyruğa Reel ekle</h2></div><span class="heading-icon">${icon('plus', 20)}</span></div>
-              <p class="panel-copy">Her satıra bir Instagram Reel bağlantısı yaz. Açıklama eklemek için URL’den sonra <code>|</code> kullan.</p>
+              <p class="panel-copy">Her satıra bir Instagram Reel bağlantısı yaz. Ayrı açıklama alanı, bu sefer eklediğin tüm Reels'lere uygulanır.</p>
               <form id="add-form">
                 <label class="sr-only" for="reel-input">Reel bağlantıları</label>
-                <textarea id="reel-input" rows="5" placeholder="https://www.instagram.com/reel/ABC123/ | İlk açıklama&#10;https://www.instagram.com/reel/XYZ456/"></textarea>
+                <textarea id="reel-input" rows="5" placeholder="https://www.instagram.com/reel/ABC123/&#10;https://www.instagram.com/reel/XYZ456/"></textarea>
                 <div class="input-meta"><span id="input-counter">0 bağlantı</span><button type="button" id="paste-button" class="text-button">Panodan yapıştır</button></div>
+                <label for="caption-input">Paylaşım açıklaması <span class="muted">(isteğe bağlı, tüm Reels'lere uygulanır)</span></label>
+                <textarea id="caption-input" rows="3" maxlength="2200" placeholder="Bu sefer eklediğin Reels'ler için açıklama yaz…"></textarea>
                 <label class="rights-check"><input type="checkbox" id="rights-confirm" /><span>Bu videoları paylaşma hakkım var veya izin aldım.</span></label>
                 <button class="button button-primary button-wide" type="submit" id="add-submit">${icon('plus', 18)} Kuyruğa ekle <span class="button-arrow">→</span></button>
               </form>
@@ -338,6 +340,8 @@ async function addToQueue(form) {
     return;
   }
   const textarea = form.querySelector('#reel-input');
+  const captionInput = form.querySelector('#caption-input');
+  const sharedCaption = captionInput.value.trim();
   const rights = form.querySelector('#rights-confirm');
   const parsed = parseReelLines(textarea.value);
   if (!parsed.items.length) {
@@ -361,7 +365,7 @@ async function addToQueue(form) {
     const { data, error } = await supabase.rpc('enqueue_reel', {
       p_shortcode: item.shortcode,
       p_source_url: item.url,
-      p_caption: item.caption,
+      p_caption: sharedCaption || item.caption,
       p_rights_confirmed: true,
     });
     if (error) {
@@ -377,6 +381,7 @@ async function addToQueue(form) {
   button.disabled = false;
   button.innerHTML = `${icon('plus', 18)} Kuyruğa ekle <span class="button-arrow">→</span>`;
   textarea.value = '';
+  captionInput.value = '';
   rights.checked = false;
   updateInputCounter('');
   await loadQueue(true);
