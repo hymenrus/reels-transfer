@@ -12,6 +12,7 @@ create table if not exists public.reels_queue (
   progress integer not null default 0 check (progress between 0 and 100),
   stage text not null default 'Kuyrukta',
   rights_confirmed boolean not null default false,
+  publish_now boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -20,9 +21,11 @@ alter table public.reels_queue add column if not exists shortcode_key text gener
 alter table public.reels_queue add column if not exists progress integer not null default 0;
 alter table public.reels_queue add column if not exists stage text not null default 'Kuyrukta';
 alter table public.reels_queue add column if not exists rights_confirmed boolean not null default false;
+alter table public.reels_queue add column if not exists publish_now boolean not null default false;
 create unique index if not exists reels_queue_user_shortcode_uq on public.reels_queue (user_id, lower(shortcode));
 create unique index if not exists reels_queue_user_shortcode_key_uq on public.reels_queue (user_id, shortcode_key);
 create index if not exists reels_queue_status_created_idx on public.reels_queue (status, created_at);
+create index if not exists reels_queue_immediate_pending_idx on public.reels_queue (created_at) where status = 'queued' and publish_now is true;
 
 alter table public.reels_queue enable row level security;
 revoke all on public.reels_queue from anon, authenticated;
@@ -56,7 +59,7 @@ grant execute on function public.enqueue_reel(text, text, text, boolean) to auth
 create or replace function public.cancel_queued_reel(p_id uuid)
 returns boolean language sql security definer set search_path = '' as $$
   with changed as (
-    update public.reels_queue set status = 'cancelled', progress = 0, stage = 'Kuyruktan çıkarıldı', updated_at = now()
+    update public.reels_queue set status = 'cancelled', publish_now = false, progress = 0, stage = 'Kuyruktan çıkarıldı', updated_at = now()
     where id = p_id and user_id = auth.uid() and status in ('queued','failed') returning 1
   ) select exists(select 1 from changed);
 $$;
@@ -155,7 +158,7 @@ returns boolean language plpgsql security definer set search_path = '' as $$
 begin
   if auth.role() is distinct from 'service_role' then raise exception 'service role required'; end if;
   if p_user_id is null or p_id is null or nullif(p_media_id, '') is null then raise exception 'invalid publication result'; end if;
-  update public.reels_queue set status = 'published', progress = 100, stage = 'Instagramda yayınlandı', ig_media_id = p_media_id, error_message = null, updated_at = now() where id = p_id and user_id = p_user_id and status = 'processing';
+  update public.reels_queue set status = 'published', progress = 100, stage = 'Instagramda yayınlandı', ig_media_id = p_media_id, error_message = null, publish_now = false, updated_at = now() where id = p_id and user_id = p_user_id and status = 'processing';
   if not found then return false; end if;
   update public.instagram_accounts set last_published_at = now(), last_processed_at = now(), updated_at = now() where user_id = p_user_id;
   return true;
@@ -163,3 +166,16 @@ end;
 $$;
 revoke all on function public.mark_reel_published(uuid, uuid, text) from public, anon, authenticated;
 grant execute on function public.mark_reel_published(uuid, uuid, text) to service_role;
+
+-- Explicit per-Reel override for a user's regular publication interval (202610070004_immediate_publish.sql).
+create or replace function public.request_immediate_publish(p_id uuid)
+returns boolean language plpgsql security definer set search_path = '' as $$
+begin
+  if auth.uid() is null then raise exception 'authentication required'; end if;
+  update public.reels_queue set publish_now = true, stage = 'Hemen paylaşım istendi', updated_at = now()
+  where id = p_id and user_id = auth.uid() and status = 'queued' and rights_confirmed is true;
+  return found;
+end;
+$$;
+revoke all on function public.request_immediate_publish(uuid) from public, anon, authenticated;
+grant execute on function public.request_immediate_publish(uuid) to authenticated;

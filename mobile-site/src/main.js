@@ -240,13 +240,15 @@ function renderQueue() {
     list.innerHTML = `<div class="empty-state"><div class="empty-art">${icon('reel', 28)}</div><strong>${state.rows.length ? 'Bu filtrede içerik yok' : 'Kuyruk henüz boş'}</strong><p>${state.rows.length ? 'Başka bir durum filtresi seçebilirsin.' : 'İlk Reel bağlantını ekle; burada durumunu takip edersin.'}</p>${state.rows.length ? '' : '<a class="text-button" href="#add-section">Reel ekle →</a>'}</div>`;
   } else {
     list.innerHTML = filtered.map((row, index) => {
-      const [label, statusClass] = statusMeta(row.status);
+      const [label, statusClass] = row.status === 'queued' && row.publish_now
+        ? ['Hemen paylaşılacak', 'queued']
+        : statusMeta(row.status);
       const progress = Math.max(0, Math.min(100, Number(row.progress || 0)));
       const safeUrl = escapeHtml(row.source_url);
       const actions = row.status === 'failed'
         ? `<button class="mini-button" data-action="retry" data-id="${escapeHtml(row.id)}">Tekrar dene</button>`
         : row.status === 'queued'
-          ? `<button class="mini-button mini-danger" data-action="cancel" data-id="${escapeHtml(row.id)}">Kaldır</button>`
+          ? `${row.publish_now ? '' : `<button class="mini-button mini-now" title="Bu Reel için yayın aralığını atla" data-action="publish-now" data-id="${escapeHtml(row.id)}">Hemen paylaş</button>`}<button class="mini-button mini-danger" data-action="cancel" data-id="${escapeHtml(row.id)}">Kaldır</button>`
           : '';
       const bar = row.status === 'processing' ? `<div class="progress-line"><span style="width:${progress}%"></span></div>` : '';
       const progressText = row.status === 'processing' ? `<small class="progress-caption">${escapeHtml(row.stage || 'İşleniyor')} · %${progress}</small>` : '';
@@ -262,7 +264,7 @@ function renderQueue() {
 async function loadQueue(silent = false) {
   if (!state.session) return;
   const { data, error } = await supabase.from('reels_queue')
-    .select('id,shortcode,shortcode_key,source_url,caption,status,progress,stage,error_message,created_at,updated_at')
+    .select('id,shortcode,shortcode_key,source_url,caption,status,progress,stage,error_message,publish_now,created_at,updated_at')
     .eq('user_id', state.session.user.id).order('created_at', { ascending: false }).limit(200);
   if (error) {
     if (!silent) toast(`Kuyruk yüklenemedi: ${error.message}`, 'error');
@@ -294,7 +296,7 @@ function renderInstagramAccount() {
     const intervals = [[60, '1 saat'], [180, '3 saat'], [360, '6 saat'], [720, '12 saat'], [1440, '1 gün'], [2880, '2 gün']];
     const selectedInterval = Number(state.instagram.publish_interval_minutes || 360);
     const options = intervals.map(([minutes, label]) => `<option value="${minutes}" ${selectedInterval === minutes ? 'selected' : ''}>${label}</option>`).join('');
-    card.innerHTML = `<div class="instagram-account-top"><div class="instagram-account-copy"><span class="ig-connected-mark">✓</span><div><strong>@${escapeHtml(state.instagram.username)}</strong><small>Instagram profesyonel hesabı bağlı · token bitişi ${fmtDate(state.instagram.token_expires_at)}</small></div></div><button id="instagram-disconnect-button" class="mini-button mini-danger">Bağlantıyı kes</button></div><label class="ig-interval-row" for="publish-interval-select"><span><strong>Reels arasındaki süre</strong><small>İlk paylaşım uygun olduğunda gider; sonrakiler bu aralıkla bekler.</small></span><select id="publish-interval-select" class="ig-interval-select" aria-label="Reels arasındaki süre">${options}</select></label>`;
+    card.innerHTML = `<div class="instagram-account-top"><div class="instagram-account-copy"><span class="ig-connected-mark">✓</span><div><strong>@${escapeHtml(state.instagram.username)}</strong><small>Instagram profesyonel hesabı bağlı · token bitişi ${fmtDate(state.instagram.token_expires_at)}</small></div></div><button id="instagram-disconnect-button" class="mini-button mini-danger">Bağlantıyı kes</button></div><label class="ig-interval-row" for="publish-interval-select"><span><strong>Reels arasındaki süre</strong><small>Normal kuyruk bu aralığa uyar; “Hemen paylaş” tek Reel için beklemeyi atlar.</small></span><select id="publish-interval-select" class="ig-interval-select" aria-label="Reels arasındaki süre">${options}</select></label>`;
   } else {
     card.innerHTML = `<div class="instagram-account-copy"><span class="ig-pending-mark">IG</span><div><strong>Instagram hesabını bağla</strong><small>Business veya Creator hesabı gerekir; kişisel hesap desteklenmez.</small></div></div><button id="instagram-connect-button" class="button button-primary ig-connect-button">${icon('reel', 16)} Hesabımı bağla</button>`;
   }
@@ -559,6 +561,26 @@ async function handleClick(event) {
     const { data, error } = await supabase.rpc('retry_failed_reel', { p_id: button.dataset.id });
     if (error) toast(`Tekrar kuyruğa alınamadı: ${error.message}`, 'error');
     else if (data) toast('Reel yeniden kuyruğa alındı.', 'success');
+    await loadQueue(true);
+    return;
+  }
+  if (button.dataset.action === 'publish-now') {
+    const row = state.rows.find((item) => item.id === button.dataset.id);
+    if (!row || row.status !== 'queued' || row.publish_now) return;
+    const caption = String(row.caption || '').trim();
+    const captionPreview = caption
+      ? `\n\nAçıklama:\n${caption}`
+      : '\n\nAçıklama: yok.';
+    const confirmed = window.confirm(
+      `/${row.shortcode} Reel'ini bağlı Instagram hesabında hemen paylaşım önceliğine almak istiyor musun?\n\nKaynak: ${row.source_url}${captionPreview}\n\nBu Reel için seçili yayın aralığı beklenmeden atlanır. Bulut işçisi 5 dakikada bir kontrol eder; istek bir sonraki uygun turda işlenir. Reel yayınlandıktan sonra normal aralık yeniden başlar.`
+    );
+    if (!confirmed) return;
+    button.disabled = true;
+    button.textContent = 'İstek gönderiliyor…';
+    const { data, error } = await supabase.rpc('request_immediate_publish', { p_id: row.id });
+    if (error) toast(`Hemen paylaşım isteği kaydedilemedi: ${error.message}`, 'error');
+    else if (data) toast('Hemen paylaşım isteği sıraya alındı; normal aralık bu Reel için atlanacak.', 'success');
+    else toast('Bu Reel artık hemen paylaşım için sıraya alınamıyor. Kuyruk durumunu yeniledim.', 'warn');
     await loadQueue(true);
     return;
   }

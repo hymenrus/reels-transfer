@@ -43,7 +43,9 @@ def test_queued_query_includes_user_id_and_queued_filter() -> None:
     assert queue.queued(10) == [job]
     params = parse_qs(urlparse(session.calls[0][1]).query)
     assert "user_id" in params["select"][0]
+    assert "publish_now" in params["select"][0]
     assert params["status"] == ["eq.queued"]
+    assert params["order"] == ["publish_now.desc,created_at.asc"]
 
 
 def test_connection_combines_owner_account_and_private_token() -> None:
@@ -97,6 +99,16 @@ def test_publication_interval_is_measured_from_last_success() -> None:
     connection = {"last_published_at": last.isoformat(), "publish_interval_minutes": 1440}
     assert github_worker._next_publication_at(connection) == last + timedelta(days=1)
     assert github_worker._next_publication_at({"last_published_at": None, "publish_interval_minutes": 60}) is None
+
+
+def test_manual_publish_request_bypasses_only_the_selected_reels_interval() -> None:
+    now = datetime(2026, 10, 7, 12, 0, tzinfo=timezone.utc)
+    due_at = now + timedelta(hours=6)
+
+    assert github_worker._interval_wait_required(due_at, now) is True
+    assert github_worker._interval_wait_required(due_at, now, publish_now=True) is False
+    assert github_worker._interval_wait_required(now - timedelta(seconds=1), now) is False
+    assert github_worker._interval_wait_required(None, now) is False
 
 
 def test_finish_publication_uses_atomic_user_scoped_rpc() -> None:

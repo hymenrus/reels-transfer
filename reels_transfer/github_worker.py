@@ -55,9 +55,9 @@ class SupabaseQueue:
 
     def queued(self, limit: int) -> list[dict[str, Any]]:
         params = urlencode({
-            "select": "id,user_id,shortcode,source_url,caption,status,progress,attempts,rights_confirmed,created_at",
+            "select": "id,user_id,shortcode,source_url,caption,status,progress,attempts,rights_confirmed,publish_now,created_at",
             "status": "eq.queued",
-            "order": "created_at.asc",
+            "order": "publish_now.desc,created_at.asc",
             "limit": str(max(1, min(limit, 200))),
         })
         response = self.session.get(self.queue_url + "?" + params, timeout=30)
@@ -204,6 +204,11 @@ def _remaining_interval(due_at: datetime, now: datetime) -> str:
     return f"{max(1, seconds // 60)} dakika"
 
 
+def _interval_wait_required(due_at: datetime | None, now: datetime, publish_now: bool = False) -> bool:
+    """A user-requested one-off publish may bypass, but never changes, the regular interval setting."""
+    return due_at is not None and due_at > now and not publish_now
+
+
 def _cleanup(*paths: Path | None) -> None:
     for path in paths:
         if path:
@@ -242,10 +247,10 @@ def run_worker() -> dict[str, int]:
         if user_id and user_id not in connections:
             connections[user_id] = queue.instagram_connection(user_id)
 
-    def fairness_key(job: dict[str, Any]) -> tuple[datetime, datetime]:
+    def fairness_key(job: dict[str, Any]) -> tuple[bool, datetime, datetime]:
         connection = connections.get(str(job.get("user_id") or ""))
         last = _parse_time(connection.get("last_processed_at")) if connection else datetime.min.replace(tzinfo=timezone.utc)
-        return last, _parse_time(job.get("created_at"))
+        return job.get("publish_now") is not True, last, _parse_time(job.get("created_at"))
 
     jobs.sort(key=fairness_key)
     published = failed = skipped = claimed = 0
@@ -274,7 +279,7 @@ def run_worker() -> dict[str, int]:
             failed += 1
             continue
         now = datetime.now(timezone.utc)
-        if due_at and due_at > now:
+        if _interval_wait_required(due_at, now, job.get("publish_now") is True):
             queue.update(
                 job,
                 status="queued",
