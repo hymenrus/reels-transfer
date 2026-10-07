@@ -66,15 +66,6 @@ function saveReelDraft() {
     console.warn('Reel taslağı bu cihazda saklanamadı:', error);
   }
 }
-function clearReelDraft() {
-  const key = reelDraftStorageKey();
-  if (!key) return;
-  try {
-    localStorage.removeItem(key);
-  } catch (error) {
-    console.warn('Reel taslağı bu cihazdan temizlenemedi:', error);
-  }
-}
 function restoreReelDraft() {
   const key = reelDraftStorageKey();
   if (!key) return;
@@ -566,12 +557,10 @@ async function addToQueue(form) {
   if (failed === 0) {
     const currentForm = document.querySelector('#add-form');
     const currentUrlInput = currentForm?.querySelector('#reel-input');
-    const currentCaptionInput = currentForm?.querySelector('#caption-input');
     const currentRightsInput = currentForm?.querySelector('#rights-confirm');
     if (currentUrlInput) currentUrlInput.value = '';
-    if (currentCaptionInput) currentCaptionInput.value = '';
     if (currentRightsInput) currentRightsInput.checked = false;
-    clearReelDraft();
+    saveReelDraft();
     updateInputCounter('');
   } else {
     saveReelDraft();
