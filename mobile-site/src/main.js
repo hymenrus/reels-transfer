@@ -318,7 +318,12 @@ function renderInstagramAccount() {
     const options = intervals.map(([minutes, label]) => `<option value="${minutes}" ${selectedInterval === minutes ? 'selected' : ''}>${label}</option>`).join('');
     card.innerHTML = `<div class="instagram-account-top"><div class="instagram-account-copy"><span class="ig-connected-mark">✓</span><div><strong>@${escapeHtml(state.instagram.username)}</strong><small>Instagram profesyonel hesabı bağlı · token bitişi ${fmtDate(state.instagram.token_expires_at)}</small></div></div><button id="instagram-disconnect-button" class="mini-button mini-danger">Bağlantıyı kes</button></div><label class="ig-interval-row" for="publish-interval-select"><span><strong>Reels arasındaki süre</strong><small>Normal kuyruk bu aralığa uyar; “Hemen paylaş” tek Reel için beklemeyi atlar.</small></span><select id="publish-interval-select" class="ig-interval-select" aria-label="Reels arasındaki süre">${options}</select></label>`;
   } else {
-    card.innerHTML = `<div class="instagram-account-copy"><span class="ig-pending-mark">IG</span><div><strong>Instagram hesabını bağla</strong><small>Business veya Creator hesabı gerekir; kişisel hesap desteklenmez.</small></div></div><button id="instagram-connect-button" class="button button-primary ig-connect-button">${icon('reel', 16)} Hesabımı bağla</button>`;
+    card.innerHTML = `<div class="instagram-account-copy"><span class="ig-pending-mark">IG</span><div><strong>Instagram hesabını bağla</strong><small>Business veya Creator hesabı gerekir. Meta uygulaması test modunda olduğundan Instagram Tester davetini kabul etmiş hesaplar bağlanabilir.</small></div></div><button id="instagram-connect-button" class="button button-primary ig-connect-button">${icon('reel', 16)} Hesabımı bağla</button><p id="instagram-connect-status" class="oauth-status" role="status" aria-live="polite"></p>`;
+    card.querySelector('#instagram-connect-button')?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void connectInstagram();
+    });
   }
   const addButton = document.querySelector('#add-submit');
   if (addButton) addButton.disabled = !state.instagram;
@@ -346,28 +351,56 @@ async function savePublishInterval(minutes) {
 
 async function connectInstagram() {
   const button = document.querySelector('#instagram-connect-button');
-  if (button) { button.disabled = true; button.textContent = 'Güvenli bağlantı açılıyor…'; }
-  let authWindow = null;
+  const status = document.querySelector('#instagram-connect-status');
+  const setStatus = (message, type = 'info') => {
+    if (!status?.isConnected) return;
+    status.textContent = message;
+    status.dataset.state = type;
+  };
+  if (!state.session) {
+    setStatus('Önce ReelFlow hesabına giriş yap.', 'error');
+    toast('Önce ReelFlow hesabına giriş yap.', 'error');
+    return;
+  }
+  if (button) { button.disabled = true; button.textContent = 'Güvenli bağlantı hazırlanıyor…'; }
+  setStatus('Instagram bağlantı isteği gönderiliyor…', 'loading');
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
+  let result;
   try {
-    authWindow = window.open('about:blank', '_blank');
-    if (authWindow) {
-      authWindow.opener = null;
-      authWindow.document.body.textContent = 'Güvenli Instagram giriş ekranı hazırlanıyor…';
-    }
-  } catch { authWindow = null; }
-  const { data, error } = await supabase.functions.invoke('instagram-oauth-start', { body: {} });
+    result = await supabase.functions.invoke('instagram-oauth-start', {
+      body: {},
+      signal: controller.signal,
+    });
+  } catch (requestError) {
+    const message = controller.signal.aborted
+      ? 'Instagram bağlantı servisi 15 saniyede yanıt vermedi. İnternetini kontrol edip yeniden dene.'
+      : 'Bağlantı isteği Supabase’e ulaşmadı. İnternetini kontrol et veya başka bir tarayıcıdan yeniden dene.';
+    renderInstagramAccount();
+    const nextStatus = document.querySelector('#instagram-connect-status');
+    if (nextStatus) { nextStatus.textContent = message; nextStatus.dataset.state = 'error'; }
+    toast(message, 'error');
+    console.warn('Instagram OAuth başlangıç isteği başarısız:', requestError?.name || 'network error');
+    return;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+  const { data, error } = result || {};
   if (error || data?.error || !data?.authorization_url) {
-    let message = data?.error || error?.message || 'Instagram bağlantısı başlatılamadı.';
+    let message = controller.signal.aborted
+      ? 'Instagram bağlantı servisi 15 saniyede yanıt vermedi. İnternetini kontrol edip yeniden dene.'
+      : (data?.error || error?.message || 'Instagram bağlantısı başlatılamadı.');
     try {
       const response = error?.context;
-      if (!data?.error && response && typeof response.clone === 'function') {
+      if (!controller.signal.aborted && !data?.error && response && typeof response.clone === 'function') {
         const detail = await response.clone().json();
         message = detail?.error || message;
       }
     } catch { /* Keep the generic safe message. */ }
-    try { if (authWindow && !authWindow.closed) authWindow.close(); } catch { /* Ignore a closed popup. */ }
-    toast(message, 'error');
     renderInstagramAccount();
+    const nextStatus = document.querySelector('#instagram-connect-status');
+    if (nextStatus) { nextStatus.textContent = message; nextStatus.dataset.state = 'error'; }
+    toast(message, 'error');
     return;
   }
   let authorizationUrl;
@@ -375,36 +408,24 @@ async function connectInstagram() {
     authorizationUrl = new URL(data.authorization_url);
     if (authorizationUrl.origin !== 'https://www.instagram.com') throw new Error('Unexpected authorization origin');
   } catch {
-    try { if (authWindow && !authWindow.closed) authWindow.close(); } catch { /* Ignore a closed popup. */ }
-    toast('Güvenli Instagram giriş adresi alınamadı. Tekrar dene.', 'error');
     renderInstagramAccount();
+    const message = 'Güvenli Instagram giriş adresi alınamadı. Tekrar dene.';
+    const nextStatus = document.querySelector('#instagram-connect-status');
+    if (nextStatus) { nextStatus.textContent = message; nextStatus.dataset.state = 'error'; }
+    toast(message, 'error');
     return;
   }
-  const fallbackLink = document.createElement('a');
-  fallbackLink.href = authorizationUrl.href;
-  fallbackLink.target = '_blank';
-  fallbackLink.rel = 'noopener noreferrer';
-  fallbackLink.className = 'text-button oauth-fallback';
-  fallbackLink.textContent = 'Giriş ekranı açılmadıysa Instagram’ı buradan aç';
-  fallbackLink.hidden = true;
-  document.querySelector('#instagram-account-card')?.append(fallbackLink);
   try {
-    if (authWindow && !authWindow.closed) {
-      authWindow.location.replace(authorizationUrl.href);
-      authWindow.focus();
-    } else {
-      window.location.assign(authorizationUrl.href);
-    }
-  } catch {
+    setStatus('Instagram giriş ekranına yönlendiriliyorsun…', 'loading');
     window.location.assign(authorizationUrl.href);
+  } catch (navigationError) {
+    const message = 'Instagram giriş ekranı açılamadı. Bağlantıyı yeniden dene.';
+    renderInstagramAccount();
+    const nextStatus = document.querySelector('#instagram-connect-status');
+    if (nextStatus) { nextStatus.textContent = message; nextStatus.dataset.state = 'error'; }
+    toast(message, 'error');
+    console.warn('Instagram OAuth yönlendirmesi başarısız:', navigationError?.name || 'navigation error');
   }
-  setTimeout(() => {
-    if (document.visibilityState !== 'visible' || !button?.isConnected) return;
-    button.disabled = false;
-    button.innerHTML = `${icon('reel', 16)} Hesabımı bağla`;
-    fallbackLink.hidden = false;
-    toast('Giriş ekranı açılmadıysa alttaki bağlantıya dokun.', 'warn');
-  }, 1800);
 }
 
 async function disconnectInstagram() {
@@ -429,7 +450,7 @@ function consumeInstagramCallback() {
   window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
   const messages = {
     connected: ['Instagram hesabın bağlandı.', 'success'],
-    cancelled: ['Instagram bağlantısını iptal ettin.', 'info'],
+    cancelled: ['Instagram izin ekranı tamamlanmadı. Test modunda hesabın Instagram Testers listesinde ve daveti kabul edilmiş olmalı; Business/Creator hesabı kullan.', 'warn'],
     setup_required: ['Instagram bağlantısı henüz hazır değil; site yöneticisinin Meta App ayarlarını tamamlaması gerekiyor.', 'warn'],
     permissions_missing: ['Yayın için gerekli Instagram izinleri verilmedi.', 'warn'],
     account_already_linked: ['Bu Instagram hesabı başka bir ReelFlow hesabına bağlı veya bağlantı kaydedilemedi.', 'error'],
@@ -518,10 +539,6 @@ async function handleClick(event) {
   if (!button) return;
   if (button.matches('.signout')) {
     await supabase.auth.signOut();
-    return;
-  }
-  if (button.id === 'instagram-connect-button') {
-    await connectInstagram();
     return;
   }
   if (button.id === 'instagram-disconnect-button') {
