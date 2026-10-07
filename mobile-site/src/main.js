@@ -47,6 +47,50 @@ function toast(message, type = 'info') {
 function fmtDate(value) {
   return new Intl.DateTimeFormat('tr-TR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(value));
 }
+const REEL_DRAFT_STORAGE_PREFIX = 'reelflow-draft-v1';
+function reelDraftStorageKey() {
+  const userId = state.session?.user?.id;
+  return userId ? `${REEL_DRAFT_STORAGE_PREFIX}:${userId}` : null;
+}
+function saveReelDraft() {
+  const key = reelDraftStorageKey();
+  const urlInput = document.querySelector('#reel-input');
+  const captionInput = document.querySelector('#caption-input');
+  if (!key || !urlInput || !captionInput) return;
+  const draft = { urls: urlInput.value, caption: captionInput.value };
+  try {
+    if (!draft.urls.trim() && !draft.caption.trim()) localStorage.removeItem(key);
+    else localStorage.setItem(key, JSON.stringify(draft));
+  } catch (error) {
+    console.warn('Reel taslağı bu cihazda saklanamadı:', error);
+  }
+}
+function clearReelDraft() {
+  const key = reelDraftStorageKey();
+  if (!key) return;
+  try {
+    localStorage.removeItem(key);
+  } catch (error) {
+    console.warn('Reel taslağı bu cihazdan temizlenemedi:', error);
+  }
+}
+function restoreReelDraft() {
+  const key = reelDraftStorageKey();
+  if (!key) return;
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return;
+    const draft = JSON.parse(raw);
+    if (!draft || typeof draft !== 'object') return;
+    const urlInput = document.querySelector('#reel-input');
+    const captionInput = document.querySelector('#caption-input');
+    if (urlInput && typeof draft.urls === 'string') urlInput.value = draft.urls;
+    if (captionInput && typeof draft.caption === 'string') captionInput.value = draft.caption.slice(0, 2200);
+    updateInputCounter(urlInput?.value || '');
+  } catch (error) {
+    console.warn('Reel taslağı bu cihazdan geri yüklenemedi:', error);
+  }
+}
 function statusMeta(status) {
   return ({
     queued: ['Sırada', 'queued'], processing: ['Yayınlanıyor', 'processing'],
@@ -130,7 +174,7 @@ function renderShell() {
                 <label class="rights-check"><input type="checkbox" id="rights-confirm" /><span>Bu videoları paylaşma hakkım var veya izin aldım.</span></label>
                 <button class="button button-primary button-wide" type="submit" id="add-submit">${icon('plus', 18)} Kuyruğa ekle <span class="button-arrow">→</span></button>
               </form>
-              <div class="privacy-note">${icon('check', 15)} Instagram parolan burada istenmez; yinelenen Reel kodları otomatik atlanır.</div>
+              <div class="privacy-note">${icon('check', 15)} URL ve açıklama taslağın bu cihazda otomatik kaydedilir; Instagram parolan burada istenmez.</div>
             </article>
             <article class="panel worker-panel" id="settings-section">
               <div class="panel-heading"><div><span class="eyebrow">YAYIN DURUMU</span><h2>Bulut bağlantıları</h2></div><span class="connection-orb ${PUBLISHER_SETUP_READY ? 'is-ready' : ''}"><i></i></span></div>
@@ -153,6 +197,7 @@ function renderShell() {
       </div>
     </div>
     <div id="toast-host" class="toast-host" aria-live="polite"></div>`;
+  restoreReelDraft();
   updateStats();
   renderQueue();
   renderInstagramAccount();
@@ -423,15 +468,25 @@ async function addToQueue(form) {
   state.busy = false;
   button.disabled = false;
   button.innerHTML = `${icon('plus', 18)} Kuyruğa ekle <span class="button-arrow">→</span>`;
-  textarea.value = '';
-  captionInput.value = '';
-  rights.checked = false;
-  updateInputCounter('');
+  if (failed === 0) {
+    const currentForm = document.querySelector('#add-form');
+    const currentUrlInput = currentForm?.querySelector('#reel-input');
+    const currentCaptionInput = currentForm?.querySelector('#caption-input');
+    const currentRightsInput = currentForm?.querySelector('#rights-confirm');
+    if (currentUrlInput) currentUrlInput.value = '';
+    if (currentCaptionInput) currentCaptionInput.value = '';
+    if (currentRightsInput) currentRightsInput.checked = false;
+    clearReelDraft();
+    updateInputCounter('');
+  } else {
+    saveReelDraft();
+  }
   await loadQueue(true);
   const parts = [];
   if (added) parts.push(`${added} yeni Reel eklendi`);
   if (duplicate) parts.push(`${duplicate} tekrar atlandı`);
   if (failed) parts.push(`${failed} satır eklenemedi`);
+  if (failed) parts.push('Taslak korundu');
   toast(parts.join(' · ') || 'Kuyruk değişmedi.', failed ? 'warn' : 'success');
   if (failed && invalidSample) toast(invalidSample, 'warn');
 }
@@ -545,14 +600,18 @@ root.addEventListener('submit', async (event) => {
 });
 root.addEventListener('input', (event) => {
   if (event.target.id === 'queue-search') renderQueue();
+  if (event.target.id === 'reel-input' || event.target.id === 'caption-input') saveReelDraft();
 });
 root.addEventListener('change', async (event) => {
   if (event.target.id === 'publish-interval-select') await savePublishInterval(Number(event.target.value));
 });
+window.addEventListener('pagehide', saveReelDraft);
 
-supabase.auth.onAuthStateChange((_event, session) => {
+supabase.auth.onAuthStateChange((event, session) => {
   if (session?.user) {
+    const sameUser = state.session?.user?.id === session.user.id;
     state.session = session;
+    if (event === 'TOKEN_REFRESHED' && sameUser) return;
     state.instagram = null;
     renderShell();
     loadInstagramAccount();
