@@ -123,7 +123,11 @@ function estimateQueueEta(rows, instagram, now = Date.now()) {
 function formatQueueEta(targetAt, priority, now = Date.now()) {
   if (priority) return 'Öncelikli · sıradaki otomatik turda';
   const minutes = Math.max(0, Math.ceil((targetAt - now) / 60_000));
-  if (minutes <= 5) return 'Sıradaki otomatik turda';
+  if (targetAt <= now) return 'Aralık doldu · sıradaki otomatik turda';
+  const localTarget = new Intl.DateTimeFormat('tr-TR', {
+    day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+  }).format(new Date(targetAt));
+  if (minutes <= 5) return `En erken ${localTarget} · sıradaki otomatik turda`;
   const days = Math.floor(minutes / 1440);
   const hours = Math.floor((minutes % 1440) / 60);
   const remainder = minutes % 60;
@@ -131,7 +135,7 @@ function formatQueueEta(targetAt, priority, now = Date.now()) {
   if (days) parts.push(`${days} gün`);
   if (hours) parts.push(`${hours} saat`);
   if (remainder && !days) parts.push(`${remainder} dk`);
-  return `Yaklaşık ${parts.join(' ')} kaldı`;
+  return `En erken ${localTarget} (yerel) · yaklaşık ${parts.join(' ')} kaldı`;
 }
 function renderLogin(message = '') {
   root.innerHTML = `

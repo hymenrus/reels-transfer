@@ -144,6 +144,21 @@ class SupabaseQueue:
         if not response.ok:
             raise QueueApiError(f"Yayın aralığı Supabase'e kaydedilemedi: HTTP {response.status_code}")
 
+    def latest_published_at(self, user_id: str) -> str | None:
+        params = urlencode({
+            "select": "published_at,created_at",
+            "user_id": f"eq.{user_id}",
+            "status": "eq.published",
+            "order": "published_at.desc.nullslast,created_at.desc",
+            "limit": "1",
+        })
+        response = self.session.get(self.queue_url + "?" + params, timeout=30)
+        rows = self._rows(response, "önceki yayın zamanı")
+        if not rows:
+            return None
+        value = rows[0].get("published_at") or rows[0].get("created_at")
+        return str(value) if value else None
+
     def media_sync_due_accounts(self, cutoff: datetime, limit: int) -> list[dict[str, Any]]:
         params = urlencode({
             "select": "user_id,instagram_user_id,last_media_sync_at",
@@ -232,6 +247,15 @@ def _active_connection(queue: SupabaseQueue, connection: dict[str, Any]) -> dict
             queue.update_instagram_token(str(connection["user_id"]), fresh_token, fresh_expiry)
             connection = {**connection, "access_token": fresh_token, "token_expires_at": fresh_expiry, "refreshed_at": now.isoformat()}
     return connection
+
+
+def _connection_with_published_history(
+    queue: SupabaseQueue, user_id: str, connection: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    if not connection or connection.get("last_published_at"):
+        return connection
+    last_published_at = queue.latest_published_at(user_id)
+    return {**connection, "last_published_at": last_published_at} if last_published_at else connection
 
 
 def _next_publication_at(connection: dict[str, Any]) -> datetime | None:
@@ -387,7 +411,8 @@ def run_worker() -> dict[str, int]:
     for job in jobs:
         user_id = str(job.get("user_id") or "")
         if user_id and user_id not in connections:
-            connections[user_id] = queue.instagram_connection(user_id)
+            connection = queue.instagram_connection(user_id)
+            connections[user_id] = _connection_with_published_history(queue, user_id, connection)
 
     def fairness_key(job: dict[str, Any]) -> tuple[bool, datetime, datetime]:
         connection = connections.get(str(job.get("user_id") or ""))

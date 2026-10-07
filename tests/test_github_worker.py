@@ -101,6 +101,34 @@ def test_publication_interval_is_measured_from_last_success() -> None:
     assert github_worker._next_publication_at({"last_published_at": None, "publish_interval_minutes": 60}) is None
 
 
+def test_latest_published_at_reads_only_the_owners_successful_queue_history() -> None:
+    last = "2026-10-07T12:00:00+00:00"
+    session = FakeRestSession([FakeResponse([{"published_at": last, "created_at": last}])])
+    queue = github_worker.SupabaseQueue("https://project.supabase.co", "server-key", session)
+
+    assert queue.latest_published_at("user-1") == last
+    params = parse_qs(urlparse(session.calls[0][1]).query)
+    assert params["user_id"] == ["eq.user-1"]
+    assert params["status"] == ["eq.published"]
+    assert params["select"] == ["published_at,created_at"]
+    assert params["limit"] == ["1"]
+
+
+def test_missing_account_publish_time_falls_back_to_latest_queue_publication() -> None:
+    last = datetime(2026, 10, 7, 12, 0, tzinfo=timezone.utc)
+
+    class HistoryQueue:
+        def latest_published_at(self, user_id):
+            assert user_id == "user-1"
+            return last.isoformat()
+
+    connection = {"user_id": "user-1", "last_published_at": None, "publish_interval_minutes": 60}
+    recovered = github_worker._connection_with_published_history(HistoryQueue(), "user-1", connection)
+
+    assert recovered["last_published_at"] == last.isoformat()
+    assert github_worker._next_publication_at(recovered) == last + timedelta(hours=1)
+
+
 def test_manual_publish_request_bypasses_only_the_selected_reels_interval() -> None:
     now = datetime(2026, 10, 7, 12, 0, tzinfo=timezone.utc)
     due_at = now + timedelta(hours=6)
