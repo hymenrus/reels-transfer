@@ -635,7 +635,18 @@ supabase.auth.onAuthStateChange((event, session) => {
     renderLogin();
   }
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`, { scope: import.meta.env.BASE_URL }).catch((error) => console.warn('PWA çevrimdışı önbellek açılamadı:', error));
+    let hadController = Boolean(navigator.serviceWorker.controller);
+    let reloadingForUpdate = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController) {
+        hadController = true;
+        return;
+      }
+      if (reloadingForUpdate) return;
+      reloadingForUpdate = true;
+      window.location.reload();
+    });
+    navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`, { scope: import.meta.env.BASE_URL, updateViaCache: 'none' }).catch((error) => console.warn('PWA çevrimdışı önbellek açılamadı:', error));
   }
 })();
 window.addEventListener('beforeinstallprompt', (event) => {

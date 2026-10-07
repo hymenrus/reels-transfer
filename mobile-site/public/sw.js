@@ -1,4 +1,4 @@
-const CACHE = 'reelflow-static-v3';
+const CACHE = 'reelflow-static-v4';
 const SHELL = ['./', './manifest.webmanifest', './icon.svg', './icon-192.png', './icon-512.png', './apple-touch-icon.png', './assets/abstract-purple-blue.jpg'];
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)).then(() => self.skipWaiting()));
