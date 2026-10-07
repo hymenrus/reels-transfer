@@ -48,6 +48,19 @@ def test_queued_query_includes_user_id_and_queued_filter() -> None:
     assert params["order"] == ["publish_now.desc,created_at.asc"]
 
 
+def test_queued_query_can_target_one_specific_reel() -> None:
+    reel_id = "12121212-1212-4212-8212-121212121212"
+    job = {"id": reel_id, "user_id": "user-1", "status": "queued"}
+    session = FakeRestSession([FakeResponse([job])])
+    queue = github_worker.SupabaseQueue("https://project.supabase.co", "server-key", session)
+
+    assert queue.queued(50, target_job_id=reel_id) == [job]
+    params = parse_qs(urlparse(session.calls[0][1]).query)
+    assert params["id"] == [f"eq.{reel_id}"]
+    assert params["status"] == ["eq.queued"]
+    assert params["limit"] == ["1"]
+
+
 def test_connection_combines_owner_account_and_private_token() -> None:
     account = {"user_id": "user-1", "instagram_user_id": "ig-1", "username": "creator", "token_expires_at": "2030-01-01T00:00:00Z"}
     credentials = {"user_id": "user-1", "access_token": "private-token", "refreshed_at": "2029-12-01T00:00:00Z"}

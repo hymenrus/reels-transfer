@@ -291,18 +291,25 @@ function renderQueue() {
         : row.status === 'queued' && row.publish_now
           ? ['Hemen paylaşılacak', 'queued']
           : statusMeta(row.status);
+      const triggerAt = Date.parse(row.updated_at || '');
+      const triggerRecentlySent = row.publish_now && row.stage === 'Hemen paylaşım tetiklendi'
+        && Number.isFinite(triggerAt) && Date.now() - triggerAt < 120_000;
       const progress = Math.max(0, Math.min(100, Number(row.progress || 0)));
       const safeUrl = escapeHtml(row.source_url);
       const actions = row.status === 'failed'
         ? `<button class="mini-button" data-action="retry" data-id="${escapeHtml(row.id)}">Tekrar dene</button>`
         : row.status === 'queued'
-          ? `${row.publish_now ? '' : `<button class="mini-button mini-now" title="Bu Reel için yayın aralığını atla" data-action="publish-now" data-id="${escapeHtml(row.id)}">Hemen paylaş</button>`}<button class="mini-button mini-danger" data-action="cancel" data-id="${escapeHtml(row.id)}">Kaldır</button>`
+          ? `${row.publish_now
+            ? triggerRecentlySent
+              ? `<button class="mini-button mini-now" disabled title="Bulut işçisi tetiklendi; sırada" data-id="${escapeHtml(row.id)}">Tetiklendi</button>`
+              : `<button class="mini-button mini-now" title="Öncelikli Reel’i şimdi yeniden tetikle" data-action="publish-now-retrigger" data-id="${escapeHtml(row.id)}">Şimdi tetikle</button>`
+            : `<button class="mini-button mini-now" title="Bu Reel için yayın aralığını atla" data-action="publish-now" data-id="${escapeHtml(row.id)}">Hemen paylaş</button>`}<button class="mini-button mini-danger" data-action="cancel" data-id="${escapeHtml(row.id)}">Kaldır</button>`
           : '';
       const bar = row.status === 'processing' ? `<div class="progress-line"><span style="width:${progress}%"></span></div>` : '';
       const progressText = row.status === 'processing'
         ? `<small class="progress-caption">${escapeHtml(row.stage || 'İşleniyor')} · toplam ~%${progress}</small>`
         : row.status === 'queued' && etaById.has(row.id)
-          ? `<small class="queue-eta">${icon('clock', 12)} ${escapeHtml(formatQueueEta(etaById.get(row.id), Boolean(row.publish_now)))}</small>`
+          ? `<small class="queue-eta">${icon('clock', 12)} ${escapeHtml(triggerRecentlySent ? 'Bulut işçisi tetiklendi; sıra bekleniyor' : formatQueueEta(etaById.get(row.id), Boolean(row.publish_now)))}</small>`
           : '';
       const error = row.status === 'failed' && row.error_message ? `<p class="error-note">${escapeHtml(row.error_message)}</p>` : '';
       return `<article class="reel-row enter" style="--row-index:${Math.min(index, 8)}"><div class="reel-thumb thumb-${index % 4}"><span class="thumb-play">▶</span><span class="thumb-label">REEL</span></div><div class="reel-details"><div class="reel-title-line"><strong>/${escapeHtml(row.shortcode)}</strong><span class="status-pill status-${statusClass}"><i></i>${label}</span></div><p class="reel-caption">${escapeHtml(row.caption || 'Açıklama eklenmedi')}</p><div class="reel-meta"><span>${icon('clock', 13)} ${fmtDate(row.created_at)}</span><a href="${safeUrl}" target="_blank" rel="noopener noreferrer">Kaynağı gör ${icon('external', 13)}</a></div>${bar}${progressText}${error}</div><div class="reel-actions">${actions}</div></article>`;
@@ -646,6 +653,20 @@ async function handleClick(event) {
     await loadQueue(true);
     return;
   }
+  if (button.dataset.action === 'publish-now-retrigger') {
+    const row = state.rows.find((item) => item.id === button.dataset.id);
+    if (!row || row.status !== 'queued' || !row.publish_now) return;
+    button.disabled = true;
+    button.textContent = 'Tetikleniyor…';
+    const { data, error } = await supabase.functions.invoke('publish-now-trigger', { body: { reel_id: row.id } });
+    if (error || data?.error) {
+      toast('Worker şimdi başlatılamadı; öncelik korunuyor ve normal otomatik turda işlenecek.', 'warn');
+    } else {
+      toast('Bu Reel için bulut işçisi tetiklendi; aktif yayın varsa ardından başlayacak.', 'success');
+    }
+    await loadQueue(true);
+    return;
+  }
   if (button.dataset.action === 'publish-now') {
     const row = state.rows.find((item) => item.id === button.dataset.id);
     if (!row || row.status !== 'queued' || row.publish_now) return;
@@ -654,15 +675,21 @@ async function handleClick(event) {
       ? `\n\nAçıklama:\n${caption}`
       : '\n\nAçıklama: yok.';
     const confirmed = window.confirm(
-      `/${row.shortcode} Reel'ini bağlı Instagram hesabında hemen paylaşım önceliğine almak istiyor musun?\n\nKaynak: ${row.source_url}${captionPreview}\n\nBu Reel için seçili yayın aralığı beklenmeden atlanır. Bulut işçisi 5 dakikada bir kontrol eder; istek bir sonraki uygun turda işlenir. Reel yayınlandıktan sonra normal aralık yeniden başlar.`
+      `/${row.shortcode} Reel'ini bağlı Instagram hesabında hemen paylaşım önceliğine almak istiyor musun?\n\nKaynak: ${row.source_url}${captionPreview}\n\nBu Reel için seçili yayın aralığı atlanır ve bulut işçisi ayrıca tetiklenir. Devam eden bir yayın varsa sıraya girebilir. Reel yayınlandıktan sonra normal aralık yeniden başlar.`
     );
     if (!confirmed) return;
     button.disabled = true;
     button.textContent = 'İstek gönderiliyor…';
     const { data, error } = await supabase.rpc('request_immediate_publish', { p_id: row.id });
     if (error) toast(`Hemen paylaşım isteği kaydedilemedi: ${error.message}`, 'error');
-    else if (data) toast('Hemen paylaşım isteği sıraya alındı; normal aralık bu Reel için atlanacak.', 'success');
-    else toast('Bu Reel artık hemen paylaşım için sıraya alınamıyor. Kuyruk durumunu yeniledim.', 'warn');
+    else if (data) {
+      const { data: triggerData, error: triggerError } = await supabase.functions.invoke('publish-now-trigger', { body: { reel_id: row.id } });
+      if (triggerError || triggerData?.error) {
+        toast('Öncelik kaydedildi ama işçi hemen başlatılamadı; Reel otomatik turun sonraki çalışmasında işlenecek.', 'warn');
+      } else {
+        toast('Bulut işçisi tetiklendi; devam eden bir yayın varsa ardından çalışacak.', 'success');
+      }
+    } else toast('Bu Reel artık hemen paylaşım için sıraya alınamıyor. Kuyruk durumunu yeniledim.', 'warn');
     await loadQueue(true);
     return;
   }

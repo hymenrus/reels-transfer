@@ -2,6 +2,11 @@ name: Process Reel queue
 
 on:
   workflow_dispatch:
+    inputs:
+      target_reel_id:
+        description: 'Queue Reel UUID for an app-triggered immediate publication'
+        required: false
+        type: string
   schedule:
     # Background queue poller only; this is not an individual Reel posting schedule.
     # Offset from minute 00 to reduce scheduled-run contention.
@@ -47,5 +52,6 @@ jobs:
           STATUS_POLL_SECONDS: '30'
           STATUS_POLL_ATTEMPTS: '10'
           CONTENT_RIGHTS_CONFIRMED: 'true'
+          TARGET_REEL_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.target_reel_id || '' }}
           DATA_DIR: ./data
         run: python -m reels_transfer.github_worker

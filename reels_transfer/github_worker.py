@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
+from uuid import UUID
 
 import requests
 
@@ -56,13 +57,17 @@ class SupabaseQueue:
         payload = response.json()
         return payload if isinstance(payload, list) else []
 
-    def queued(self, limit: int) -> list[dict[str, Any]]:
-        params = urlencode({
+    def queued(self, limit: int, target_job_id: str | None = None) -> list[dict[str, Any]]:
+        filters = {
             "select": "id,user_id,shortcode,source_url,caption,status,progress,attempts,rights_confirmed,publish_now,created_at",
             "status": "eq.queued",
             "order": "publish_now.desc,created_at.asc",
             "limit": str(max(1, min(limit, 200))),
-        })
+        }
+        if target_job_id:
+            filters["id"] = f"eq.{target_job_id}"
+            filters["limit"] = "1"
+        params = urlencode(filters)
         response = self.session.get(self.queue_url + "?" + params, timeout=30)
         return self._rows(response, "kuyruk")
 
@@ -406,7 +411,16 @@ def run_worker() -> dict[str, int]:
         return {"published": 0, "failed": 0, "skipped": 0}
 
     queue = SupabaseQueue(project_url, service_key)
-    jobs = queue.queued(max(50, settings.max_posts_per_run * 20))
+    target_reel_id = os.getenv("TARGET_REEL_ID", "").strip()
+    if target_reel_id:
+        try:
+            target_reel_id = str(UUID(target_reel_id))
+        except ValueError as exc:
+            raise ConfigError("TARGET_REEL_ID geçerli bir UUID olmalı.") from exc
+    jobs = queue.queued(
+        max(50, settings.max_posts_per_run * 20),
+        target_job_id=target_reel_id or None,
+    )
     connections: dict[str, dict[str, Any] | None] = {}
     for job in jobs:
         user_id = str(job.get("user_id") or "")
