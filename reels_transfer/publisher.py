@@ -7,8 +7,10 @@ Facebook Login modu: mevcut resumable rupload akışını kullanır.
 from __future__ import annotations
 
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import parse_qs, urlsplit
 
 import requests
 
@@ -90,6 +92,79 @@ class InstagramPublisher:
                 return 100
             raise InstagramApiError(f"Beklenmeyen kota yanıtı: {payload}")
         return max(0, int(total) - int(used))
+
+    @staticmethod
+    def _parse_media_timestamp(value: Any) -> datetime | None:
+        if not isinstance(value, str) or not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    def list_own_media_ids(
+        self,
+        oldest_needed_at: datetime,
+        max_pages: int = 25,
+    ) -> tuple[set[str], datetime | None, bool]:
+        """List own Instagram media IDs, stopping once tracked publication dates are covered."""
+        if self._api_mode != "instagram_login":
+            raise InstagramApiError("Kendi medya listesi Instagram Login API'si gerektirir.")
+        if oldest_needed_at.tzinfo is None:
+            oldest_needed_at = oldest_needed_at.replace(tzinfo=timezone.utc)
+        oldest_needed_at = oldest_needed_at.astimezone(timezone.utc)
+        page_limit = max(1, min(int(max_pages), 100))
+        url = f"{self._base_url}/{self._ig_user_id}/media"
+        params: dict[str, str] = {"fields": "id,timestamp", "limit": "100"}
+        seen_cursors: set[str] = set()
+        media_ids: set[str] = set()
+        oldest_seen: datetime | None = None
+        coverage_complete = False
+
+        for _ in range(page_limit):
+            payload = self._request(
+                "GET", url, headers=self._bearer_headers(), params=params, timeout=30,
+            )
+            entries = payload.get("data")
+            if not isinstance(entries, list):
+                raise InstagramApiError("Instagram medya listesi beklenmeyen yanıt döndürdü.")
+
+            page_oldest: datetime | None = None
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                media_id = entry.get("id")
+                if media_id is not None:
+                    media_ids.add(str(media_id))
+                timestamp = self._parse_media_timestamp(entry.get("timestamp"))
+                if timestamp and (page_oldest is None or timestamp < page_oldest):
+                    page_oldest = timestamp
+            if page_oldest and (oldest_seen is None or page_oldest < oldest_seen):
+                oldest_seen = page_oldest
+
+            paging = payload.get("paging") or {}
+            next_url = paging.get("next") if isinstance(paging, dict) else None
+            if not next_url:
+                coverage_complete = True
+                break
+            if page_oldest and page_oldest <= oldest_needed_at:
+                coverage_complete = True
+                break
+
+            cursors = paging.get("cursors") or {}
+            after = cursors.get("after") if isinstance(cursors, dict) else None
+            if not after and isinstance(next_url, str):
+                after = parse_qs(urlsplit(next_url).query).get("after", [None])[0]
+            after = str(after or "")
+            if not after or after in seen_cursors:
+                break
+            seen_cursors.add(after)
+            params["after"] = after
+
+        return media_ids, oldest_seen, coverage_complete
 
     def upload_public_video(self, video_path: Path) -> str:
         """Instagram Login için Meta'nın erişebileceği geçici HTTPS URL üretir.

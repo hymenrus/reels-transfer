@@ -16,6 +16,9 @@ from .media import MediaError, ensure_tools_available, prepare_for_reels
 from .publisher import InstagramApiError, InstagramPublisher, refresh_long_lived_token
 
 LOGGER = logging.getLogger("reels_transfer.github_worker")
+MEDIA_SYNC_INTERVAL = timedelta(minutes=30)
+MAX_MEDIA_SYNC_ACCOUNTS_PER_RUN = 10
+MAX_MEDIA_SYNC_PAGES = 25
 
 
 class QueueApiError(RuntimeError):
@@ -141,6 +144,53 @@ class SupabaseQueue:
         if not response.ok:
             raise QueueApiError(f"Yayın aralığı Supabase'e kaydedilemedi: HTTP {response.status_code}")
 
+    def media_sync_due_accounts(self, cutoff: datetime, limit: int) -> list[dict[str, Any]]:
+        params = urlencode({
+            "select": "user_id,instagram_user_id,last_media_sync_at",
+            "order": "last_media_sync_at.asc.nullsfirst",
+            "limit": "1000",
+        })
+        response = self.session.get(self.accounts_url + "?" + params, timeout=30)
+        accounts = self._rows(response, "Instagram medya eşitleme hesapları")
+        due = []
+        for account in accounts:
+            if _parse_time(account.get("last_media_sync_at")) <= cutoff:
+                due.append(account)
+        return due[:max(0, limit)]
+
+    def published_reels(self, user_id: str, instagram_user_id: str) -> list[dict[str, Any]]:
+        params = urlencode({
+            "select": "id,user_id,ig_media_id,published_at,created_at,published_instagram_user_id,is_deleted_on_instagram",
+            "user_id": f"eq.{user_id}",
+            "status": "eq.published",
+            "ig_media_id": "not.is.null",
+            "published_instagram_user_id": f"eq.{instagram_user_id}",
+            "published_at": "not.is.null",
+            "order": "published_at.desc",
+            "limit": "1000",
+        })
+        response = self.session.get(self.queue_url + "?" + params, timeout=30)
+        return self._rows(response, "Instagram'da yayınlanmış Reels")
+
+    def update_media_presence(self, job: dict[str, Any], present: bool) -> bool:
+        return self.update(
+            job,
+            is_deleted_on_instagram=not present,
+            instagram_deleted_at=None if present else datetime.now(timezone.utc).isoformat(),
+        )
+
+    def mark_media_sync_attempt(self, user_id: str) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        params = urlencode({"user_id": f"eq.{user_id}"})
+        response = self.session.patch(
+            self.accounts_url + "?" + params,
+            json={"last_media_sync_at": now, "updated_at": now},
+            headers={"Prefer": "return=representation"},
+            timeout=30,
+        )
+        if not response.ok:
+            raise QueueApiError(f"Instagram medya eşitleme zamanı kaydedilemedi: HTTP {response.status_code}")
+
     def finish_publication(self, user_id: str, job_id: str, media_id: str) -> bool:
         response = self.session.post(
             self.rpc_url + "/mark_reel_published",
@@ -223,6 +273,74 @@ def _mark_failed(queue: SupabaseQueue, job: dict[str, Any], message: str) -> Non
         queue.update(job, status="failed", stage="Yayın başarısız", error_message=message[:1000])
     except QueueApiError:
         LOGGER.exception("Hata durumu Supabase'e yazılamadı (%s).", job.get("shortcode", "bilinmeyen"))
+
+
+def _sync_published_instagram_media(queue: SupabaseQueue, settings: Settings) -> tuple[int, int]:
+    """Compare locally tracked publications with each owner's Instagram media list."""
+    now = datetime.now(timezone.utc)
+    due_accounts = queue.media_sync_due_accounts(now - MEDIA_SYNC_INTERVAL, MAX_MEDIA_SYNC_ACCOUNTS_PER_RUN)
+    removed = restored = 0
+    for account in due_accounts:
+        user_id = str(account.get("user_id") or "")
+        instagram_user_id = str(account.get("instagram_user_id") or "")
+        if not user_id or not instagram_user_id:
+            continue
+        account_removed = account_restored = 0
+        try:
+            rows = queue.published_reels(user_id, instagram_user_id)
+            if not rows:
+                continue
+            connection = queue.instagram_connection(user_id)
+            if not connection or str(connection.get("instagram_user_id") or "") != instagram_user_id:
+                continue
+            connection = _active_connection(queue, connection)
+            dates = [
+                _parse_time(row.get("published_at") or row.get("created_at"))
+                for row in rows
+            ]
+            dates = [value for value in dates if value != datetime.min.replace(tzinfo=timezone.utc)]
+            if not dates:
+                continue
+            media_ids, oldest_seen, coverage_complete = _publisher(
+                settings,
+                str(connection["access_token"]),
+                instagram_user_id,
+            ).list_own_media_ids(min(dates), max_pages=MAX_MEDIA_SYNC_PAGES)
+
+            for row in rows:
+                published_at = _parse_time(row.get("published_at") or row.get("created_at"))
+                if published_at == datetime.min.replace(tzinfo=timezone.utc):
+                    continue
+                is_covered = coverage_complete or (oldest_seen is not None and published_at >= oldest_seen)
+                if not is_covered:
+                    continue
+                present = str(row.get("ig_media_id") or "") in media_ids
+                was_missing = row.get("is_deleted_on_instagram") is True
+                if present == (not was_missing):
+                    continue
+                if queue.update_media_presence(row, present):
+                    if present:
+                        account_restored += 1
+                    else:
+                        account_removed += 1
+            removed += account_removed
+            restored += account_restored
+            LOGGER.info(
+                "Instagram medya eşitlemesi tamamlandı: kullanıcı=%s, kontrol edilen=%d, artık bulunmayan=%d, geri gelen=%d%s",
+                user_id,
+                len(rows),
+                account_removed,
+                account_restored,
+                " (kısmi tarama)" if not coverage_complete else "",
+            )
+        except (InstagramApiError, QueueApiError, KeyError, TypeError, ValueError, OSError) as exc:
+            LOGGER.warning("Instagram medya eşitlemesi atlandı (kullanıcı=%s): %s", user_id, exc)
+        finally:
+            try:
+                queue.mark_media_sync_attempt(user_id)
+            except QueueApiError:
+                LOGGER.exception("Instagram medya eşitleme zamanı kaydedilemedi (kullanıcı=%s).", user_id)
+    return removed, restored
 
 
 def run_worker() -> dict[str, int]:
@@ -364,6 +482,11 @@ def run_worker() -> dict[str, int]:
             failed += 1
         finally:
             _cleanup(source_file, reel_file)
+
+    try:
+        _sync_published_instagram_media(queue, settings)
+    except QueueApiError:
+        LOGGER.exception("Instagram medya eşitleme turu başlatılamadı.")
 
     return {"published": published, "failed": failed, "skipped": skipped}
 

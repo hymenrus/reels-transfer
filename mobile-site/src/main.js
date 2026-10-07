@@ -187,7 +187,7 @@ function renderShell() {
           </section>
           <section class="panel queue-panel" id="queue-section">
             <div class="queue-heading"><div><span class="eyebrow">İÇERİK MERKEZİ</span><h2>Reel kuyruğu <span id="queue-count" class="queue-count">0</span></h2></div><div class="queue-tools"><div class="search-wrap">${icon('search', 17)}<input type="search" id="queue-search" placeholder="Kuyrukta ara" aria-label="Kuyrukta ara" /></div><button class="icon-button refresh-button" id="refresh-button" title="Yenile" aria-label="Kuyruğu yenile">${icon('refresh', 17)}</button></div></div>
-            <div class="filter-row" role="tablist" aria-label="Kuyruk filtresi"><button class="filter-chip active" data-filter="all">Tümü</button><button class="filter-chip" data-filter="queued">Kuyrukta</button><button class="filter-chip" data-filter="processing">Yayınlanıyor</button><button class="filter-chip" data-filter="published">Yayınlandı</button><button class="filter-chip" data-filter="failed">Hata</button></div>
+            <div class="filter-row" role="tablist" aria-label="Kuyruk filtresi"><button class="filter-chip active" data-filter="all">Tümü</button><button class="filter-chip" data-filter="queued">Kuyrukta</button><button class="filter-chip" data-filter="processing">Yayınlanıyor</button><button class="filter-chip" data-filter="published">Yayınlandı</button><button class="filter-chip" data-filter="unavailable">Instagram’da yok</button><button class="filter-chip" data-filter="failed">Hata</button></div>
             <div id="queue-list" class="queue-list"><div class="loading-row"><span class="spinner"></span> Kuyruk yükleniyor…</div></div>
             <div id="queue-footer" class="queue-footer"></div>
           </section>
@@ -215,7 +215,7 @@ function updateStats() {
   const counts = { total: state.rows.length, queued: 0, published: 0, failed: 0 };
   for (const row of state.rows) {
     if (row.status === 'queued') counts.queued++;
-    if (row.status === 'published') counts.published++;
+    if (row.status === 'published' && row.is_deleted_on_instagram !== true) counts.published++;
     if (row.status === 'failed') counts.failed++;
   }
   for (const [key, value] of Object.entries(counts)) {
@@ -232,7 +232,11 @@ function renderQueue() {
   if (!list) return;
   const query = (document.querySelector('#queue-search')?.value || '').trim().toLowerCase();
   const filtered = state.rows.filter((row) => {
-    const filterMatch = state.filter === 'all' || row.status === state.filter;
+    const unavailable = row.status === 'published' && row.is_deleted_on_instagram === true;
+    const filterMatch = state.filter === 'all'
+      || (state.filter === 'published' && row.status === 'published' && !unavailable)
+      || (state.filter === 'unavailable' && unavailable)
+      || (!['all', 'published', 'unavailable'].includes(state.filter) && row.status === state.filter);
     const queryMatch = !query || `${row.shortcode} ${row.source_url} ${row.caption}`.toLowerCase().includes(query);
     return filterMatch && queryMatch;
   });
@@ -240,9 +244,12 @@ function renderQueue() {
     list.innerHTML = `<div class="empty-state"><div class="empty-art">${icon('reel', 28)}</div><strong>${state.rows.length ? 'Bu filtrede içerik yok' : 'Kuyruk henüz boş'}</strong><p>${state.rows.length ? 'Başka bir durum filtresi seçebilirsin.' : 'İlk Reel bağlantını ekle; burada durumunu takip edersin.'}</p>${state.rows.length ? '' : '<a class="text-button" href="#add-section">Reel ekle →</a>'}</div>`;
   } else {
     list.innerHTML = filtered.map((row, index) => {
-      const [label, statusClass] = row.status === 'queued' && row.publish_now
-        ? ['Hemen paylaşılacak', 'queued']
-        : statusMeta(row.status);
+      const unavailable = row.status === 'published' && row.is_deleted_on_instagram === true;
+      const [label, statusClass] = unavailable
+        ? ['Instagram’da yok', 'unavailable']
+        : row.status === 'queued' && row.publish_now
+          ? ['Hemen paylaşılacak', 'queued']
+          : statusMeta(row.status);
       const progress = Math.max(0, Math.min(100, Number(row.progress || 0)));
       const safeUrl = escapeHtml(row.source_url);
       const actions = row.status === 'failed'
@@ -257,21 +264,34 @@ function renderQueue() {
     }).join('');
   }
   const footer = document.querySelector('#queue-footer');
-  if (footer) footer.textContent = state.rows.length ? `En yeni ${Math.min(state.rows.length, 200)} kayıt gösteriliyor · sayfa açıkken durum otomatik yenilenir` : '';
+  if (footer) footer.textContent = state.rows.length ? `En yeni ${Math.min(state.rows.length, 200)} kayıt gösteriliyor · kuyruk durumu otomatik yenilenir · Instagram medya kontrolü yaklaşık 30 dakikada bir` : '';
   updateStats();
 }
 
 async function loadQueue(silent = false) {
   if (!state.session) return;
   const { data, error } = await supabase.from('reels_queue')
-    .select('id,shortcode,shortcode_key,source_url,caption,status,progress,stage,error_message,publish_now,created_at,updated_at')
+    .select('id,shortcode,shortcode_key,source_url,caption,status,progress,stage,error_message,publish_now,is_deleted_on_instagram,published_at,instagram_deleted_at,created_at,updated_at')
     .eq('user_id', state.session.user.id).order('created_at', { ascending: false }).limit(200);
   if (error) {
     if (!silent) toast(`Kuyruk yüklenemedi: ${error.message}`, 'error');
     return;
   }
+  const previousRows = new Map(state.rows.map((row) => [row.id, row]));
   state.rows = data || [];
+  const newlyUnavailable = state.rows.filter((row) =>
+    row.status === 'published'
+    && row.is_deleted_on_instagram === true
+    && previousRows.get(row.id)?.is_deleted_on_instagram !== true
+  ).length;
+  const restored = state.rows.filter((row) =>
+    row.status === 'published'
+    && row.is_deleted_on_instagram !== true
+    && previousRows.get(row.id)?.is_deleted_on_instagram === true
+  ).length;
   renderQueue();
+  if (newlyUnavailable) toast(`${newlyUnavailable} Reel Instagram’da artık bulunmadığı için yayınlandı sayısından düşürüldü.`, 'info');
+  if (restored) toast(`${restored} Reel Instagram’da yeniden bulundu; yayınlandı sayısına eklendi.`, 'success');
 }
 
 async function loadInstagramAccount() {
