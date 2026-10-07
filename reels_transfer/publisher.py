@@ -166,7 +166,11 @@ class InstagramPublisher:
 
         return media_ids, oldest_seen, coverage_complete
 
-    def upload_public_video(self, video_path: Path) -> str:
+    def upload_public_video(
+        self,
+        video_path: Path,
+        progress_callback: Callable[[int, str], None] | None = None,
+    ) -> str:
         """Instagram Login için Meta'nın erişebileceği geçici HTTPS URL üretir.
 
         Dosyayı üçüncü taraf bir medya sunucusuna yükler; hassas videoları
@@ -174,7 +178,17 @@ class InstagramPublisher:
         """
         if self._public_upload_mode == "cloudinary":
             try:
-                return self._cloudinary.upload_video(video_path)
+                def report_cloudinary_progress(percent: int) -> None:
+                    if not progress_callback:
+                        return
+                    bucket = min(100, max(0, (int(percent) // 10) * 10))
+                    overall = 62 + int(bucket * 0.20)
+                    progress_callback(overall, f"Cloudinary'ye video aktarılıyor · %{bucket}")
+
+                return self._cloudinary.upload_video(
+                    video_path,
+                    report_cloudinary_progress if progress_callback else None,
+                )
             except CloudinaryUploadError as exc:
                 raise InstagramApiError(str(exc)) from exc
         if self._public_upload_mode == "catbox":
@@ -186,6 +200,8 @@ class InstagramPublisher:
                 "Instagram Login için PUBLIC_UPLOAD_MODE=cloudinary, catbox veya tmpfiles olmalı; "
                 "Instagram yerel Windows dosyasını doğrudan göremez."
             )
+        if progress_callback:
+            progress_callback(64, "Geçici video aktarımı başlıyor")
         if not video_path.exists():
             raise InstagramApiError(f"Yüklenecek dosya yok: {video_path.name}")
         try:
@@ -225,6 +241,8 @@ class InstagramPublisher:
             raise InstagramApiError("Geçici yükleyici geçerli bir HTTPS adresi döndürmedi.")
         # tmpfiles.org görüntüleme URL'sini doğrudan indirme URL'sine çevir.
         url = url.replace("https://tmpfiles.org/", "https://tmpfiles.org/dl/", 1)
+        if progress_callback:
+            progress_callback(82, "Geçici video aktarımı tamamlandı")
         return url
 
     def create_reel_container(self, caption: str, video_url: str | None = None) -> tuple[str, str | None]:
@@ -262,7 +280,11 @@ class InstagramPublisher:
         if not payload.get("success"):
             raise InstagramApiError(f"Yükleme başarısız: {payload}")
 
-    def wait_until_ready(self, container_id: str) -> None:
+    def wait_until_ready(
+        self,
+        container_id: str,
+        progress_callback: Callable[[int, str], None] | None = None,
+    ) -> None:
         for attempt in range(1, self._poll_attempts + 1):
             payload = self._request(
                 "GET", f"{self._base_url}/{container_id}",
@@ -270,10 +292,16 @@ class InstagramPublisher:
             )
             status = payload.get("status_code")
             if status == "FINISHED":
+                if progress_callback:
+                    progress_callback(97, "Instagram videosu hazır · yayınlanıyor")
                 return
             if status in {"ERROR", "EXPIRED"}:
                 detail = payload.get("status") or payload.get("error") or status
                 raise InstagramApiError(f"Container durumu: {detail}; Meta yanıtı: {payload}")
+            if progress_callback:
+                divisor = max(1, self._poll_attempts)
+                percent = min(96, 84 + int(12 * attempt / divisor))
+                progress_callback(percent, f"Instagram videoyu işliyor · kontrol {attempt}/{self._poll_attempts}")
             if attempt < self._poll_attempts:
                 self._sleep(self._poll_seconds)
         raise InstagramApiError("Video işleme süresi aşıldı; STATUS_POLL_ATTEMPTS değerini artır.")
@@ -288,12 +316,24 @@ class InstagramPublisher:
             raise InstagramApiError(f"Yayın yanıtı eksik: {payload}")
         return media_id
 
-    def publish_reel(self, video_path: Path, caption: str) -> str:
-        public_url = self.upload_public_video(video_path) if self._api_mode == "instagram_login" else None
+    def publish_reel(
+        self,
+        video_path: Path,
+        caption: str,
+        progress_callback: Callable[[int, str], None] | None = None,
+    ) -> str:
+        public_url = self.upload_public_video(video_path, progress_callback) if self._api_mode == "instagram_login" else None
+        if progress_callback:
+            progress_callback(84, "Instagram Reels bilgileri hazırlanıyor")
         container_id, upload_uri = self.create_reel_container(caption, public_url)
         self.upload_video(upload_uri, video_path)
-        self.wait_until_ready(container_id)
-        return self.publish_container(container_id)
+        self.wait_until_ready(container_id, progress_callback)
+        if progress_callback:
+            progress_callback(98, "Instagram hesabında yayınlanıyor")
+        media_id = self.publish_container(container_id)
+        if progress_callback:
+            progress_callback(99, "Yayın yanıtı alındı · kayıt güncelleniyor")
+        return media_id
 
 
 def refresh_long_lived_token(

@@ -111,6 +111,26 @@ def test_manual_publish_request_bypasses_only_the_selected_reels_interval() -> N
     assert github_worker._interval_wait_required(None, now) is False
 
 
+def test_publication_progress_is_monotonic_and_skips_duplicates() -> None:
+    class RecordingQueue:
+        def __init__(self):
+            self.updates = []
+
+        def update(self, job, **fields):
+            self.updates.append(fields)
+            return True
+
+    queue = RecordingQueue()
+    reporter = github_worker.PublicationProgress(queue, {"id": "job-1", "user_id": "user-1"}, initial_progress=62)
+    reporter(62, "Cloudinary · %0")
+    reporter(62, "Cloudinary · %0")
+    reporter(72, "Cloudinary · %50")
+    reporter(66, "Instagram hazırlanıyor")
+    reporter(120, "Instagram yayında")
+
+    assert [entry["progress"] for entry in queue.updates] == [62, 72, 72, 98]
+
+
 def test_finish_publication_uses_atomic_user_scoped_rpc() -> None:
     session = FakeRestSession([FakeResponse(True)])
     queue = github_worker.SupabaseQueue("https://project.supabase.co", "server-key", session)

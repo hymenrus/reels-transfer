@@ -217,6 +217,33 @@ def test_refresh_long_lived_token_uses_instagram_refresh_endpoint() -> None:
     assert kwargs["params"] == {"grant_type": "ig_refresh_token", "access_token": "OLD-TOKEN"}
 
 
+def test_instagram_login_publish_reports_progress_stages(tmp_path: Path) -> None:
+    video = tmp_path / "reel.mp4"
+    video.write_bytes(b"video")
+    session = FakeSession([
+        FakeResponse({"id": "container-1"}),
+        FakeResponse({"status_code": "FINISHED"}),
+        FakeResponse({"id": "media-1"}),
+    ])
+    publisher = make_instagram_login_publisher(session)
+    progress: list[tuple[int, str]] = []
+
+    def fake_cloudinary_upload(path, callback):
+        callback(0)
+        callback(50)
+        callback(100)
+        return "https://res.cloudinary.com/demo/video/upload/reel.mp4"
+
+    publisher._cloudinary.upload_video = fake_cloudinary_upload
+    media_id = publisher.publish_reel(video, "caption", progress_callback=lambda percent, stage: progress.append((percent, stage)))
+
+    assert media_id == "media-1"
+    assert (72, "Cloudinary'ye video aktarılıyor · %50") in progress
+    assert any(percent == 97 and "hazır" in stage for percent, stage in progress)
+    assert progress[-2][0] == 98
+    assert progress[-1][0] == 99
+
+
 def test_refresh_error_does_not_leak_access_token() -> None:
     class RefreshSession:
         def get(self, url: str, **kwargs):

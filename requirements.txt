@@ -1,4 +1,5 @@
 requests>=2.32
+requests-toolbelt>=1.0.0
 python-dotenv>=1.0
 yt-dlp
 pytest>=8.0

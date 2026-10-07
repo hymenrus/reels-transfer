@@ -8,6 +8,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
 });
 const state = { session: null, rows: [], instagram: null, filter: 'all', theme: localStorage.getItem('reelflow-theme') || 'dark', installPrompt: null, busy: false };
+let idleQueueRefreshTicks = 0;
 document.documentElement.dataset.theme = state.theme;
 
 const icon = (name, size = 20) => {
@@ -96,6 +97,50 @@ function statusMeta(status) {
     queued: ['Sırada', 'queued'], processing: ['Yayınlanıyor', 'processing'],
     published: ['Yayınlandı', 'published'], failed: ['Hata', 'failed'], cancelled: ['İptal edildi', 'cancelled'],
   })[status] || ['Bilinmiyor', 'queued'];
+}
+function estimateQueueEta(rows, instagram, now = Date.now()) {
+  const estimates = new Map();
+  if (!instagram) return estimates;
+  const intervalMs = Number(instagram.publish_interval_minutes || 360) * 60_000;
+  if (!Number.isFinite(intervalMs) || intervalMs <= 0) return estimates;
+  const queued = rows.filter((row) => row.status === 'queued');
+  const priority = queued.filter((row) => row.publish_now);
+  const regular = queued.filter((row) => !row.publish_now);
+  const createdAt = (row) => {
+    const time = Date.parse(row.created_at || '');
+    return Number.isFinite(time) ? time : 0;
+  };
+  const byAge = (a, b) => createdAt(a) - createdAt(b);
+  priority.sort(byAge).forEach((row) => estimates.set(row.id, now));
+  const accountLast = Date.parse(instagram.last_published_at || '');
+  let lastPublished = Number.isFinite(accountLast) ? accountLast : 0;
+  for (const row of rows) {
+    if (row.status !== 'published') continue;
+    const publishedAt = Date.parse(row.published_at || row.created_at || '');
+    if (Number.isFinite(publishedAt)) lastPublished = Math.max(lastPublished, publishedAt);
+  }
+  const hasInFlightOrPriority = priority.length > 0 || rows.some((row) => row.status === 'processing');
+  let nextAt = hasInFlightOrPriority
+    ? now + intervalMs
+    : lastPublished ? Math.max(now, lastPublished + intervalMs) : now;
+  regular.sort(byAge).forEach((row) => {
+    estimates.set(row.id, nextAt);
+    nextAt += intervalMs;
+  });
+  return estimates;
+}
+function formatQueueEta(targetAt, priority, now = Date.now()) {
+  if (priority) return 'Öncelikli · sıradaki otomatik turda';
+  const minutes = Math.max(0, Math.ceil((targetAt - now) / 60_000));
+  if (minutes <= 5) return 'Sıradaki otomatik turda';
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor((minutes % 1440) / 60);
+  const remainder = minutes % 60;
+  const parts = [];
+  if (days) parts.push(`${days} gün`);
+  if (hours) parts.push(`${hours} saat`);
+  if (remainder && !days) parts.push(`${remainder} dk`);
+  return `Yaklaşık ${parts.join(' ')} kaldı`;
 }
 function renderLogin(message = '') {
   root.innerHTML = `
@@ -230,6 +275,7 @@ function updateStats() {
 function renderQueue() {
   const list = document.querySelector('#queue-list');
   if (!list) return;
+  const etaById = estimateQueueEta(state.rows, state.instagram);
   const query = (document.querySelector('#queue-search')?.value || '').trim().toLowerCase();
   const filtered = state.rows.filter((row) => {
     const unavailable = row.status === 'published' && row.is_deleted_on_instagram === true;
@@ -258,7 +304,11 @@ function renderQueue() {
           ? `${row.publish_now ? '' : `<button class="mini-button mini-now" title="Bu Reel için yayın aralığını atla" data-action="publish-now" data-id="${escapeHtml(row.id)}">Hemen paylaş</button>`}<button class="mini-button mini-danger" data-action="cancel" data-id="${escapeHtml(row.id)}">Kaldır</button>`
           : '';
       const bar = row.status === 'processing' ? `<div class="progress-line"><span style="width:${progress}%"></span></div>` : '';
-      const progressText = row.status === 'processing' ? `<small class="progress-caption">${escapeHtml(row.stage || 'İşleniyor')} · %${progress}</small>` : '';
+      const progressText = row.status === 'processing'
+        ? `<small class="progress-caption">${escapeHtml(row.stage || 'İşleniyor')} · toplam ~%${progress}</small>`
+        : row.status === 'queued' && etaById.has(row.id)
+          ? `<small class="queue-eta">${icon('clock', 12)} ${escapeHtml(formatQueueEta(etaById.get(row.id), Boolean(row.publish_now)))}</small>`
+          : '';
       const error = row.status === 'failed' && row.error_message ? `<p class="error-note">${escapeHtml(row.error_message)}</p>` : '';
       return `<article class="reel-row enter" style="--row-index:${Math.min(index, 8)}"><div class="reel-thumb thumb-${index % 4}"><span class="thumb-play">▶</span><span class="thumb-label">REEL</span></div><div class="reel-details"><div class="reel-title-line"><strong>/${escapeHtml(row.shortcode)}</strong><span class="status-pill status-${statusClass}"><i></i>${label}</span></div><p class="reel-caption">${escapeHtml(row.caption || 'Açıklama eklenmedi')}</p><div class="reel-meta"><span>${icon('clock', 13)} ${fmtDate(row.created_at)}</span><a href="${safeUrl}" target="_blank" rel="noopener noreferrer">Kaynağı gör ${icon('external', 13)}</a></div>${bar}${progressText}${error}</div><div class="reel-actions">${actions}</div></article>`;
     }).join('');
@@ -307,6 +357,7 @@ async function loadInstagramAccount() {
   }
   state.instagram = data || null;
   renderInstagramAccount();
+  renderQueue();
 }
 
 function renderInstagramAccount() {
@@ -345,6 +396,7 @@ async function savePublishInterval(minutes) {
   }
   state.instagram = { ...state.instagram, publish_interval_minutes: data.publish_interval_minutes };
   renderInstagramAccount();
+  renderQueue();
   const label = { 60: '1 saat', 180: '3 saat', 360: '6 saat', 720: '12 saat', 1440: '1 gün', 2880: '2 gün' }[minutes];
   toast(`Reels aralığı ${label} olarak kaydedildi.`, 'success');
 }
@@ -718,4 +770,15 @@ window.addEventListener('offline', () => document.querySelector('.connection-pil
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && state.session) loadInstagramAccount();
 });
-setInterval(() => { if (state.session && !document.hidden) loadQueue(true); }, 15000);
+setInterval(() => {
+  if (!state.session || document.hidden) return;
+  if (state.rows.some((row) => row.status === 'processing')) {
+    idleQueueRefreshTicks = 0;
+    loadQueue(true);
+    return;
+  }
+  if (++idleQueueRefreshTicks >= 3) {
+    idleQueueRefreshTicks = 0;
+    loadQueue(true);
+  }
+}, 5000);

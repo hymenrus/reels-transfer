@@ -5,8 +5,10 @@ Cloud Name + unsigned Upload Preset yeterlidir; API secret istemez.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Callable
 
 import requests
+from requests_toolbelt.multipart.encoder import MultipartEncoder, MultipartEncoderMonitor
 
 
 class CloudinaryUploadError(RuntimeError):
@@ -19,7 +21,11 @@ class CloudinaryUploader:
         self.upload_preset = upload_preset.strip()
         self.session = session or requests.Session()
 
-    def upload_video(self, video_path: Path) -> str:
+    def upload_video(
+        self,
+        video_path: Path,
+        progress_callback: Callable[[int], None] | None = None,
+    ) -> str:
         if not self.cloud_name or not self.upload_preset:
             raise CloudinaryUploadError(
                 "CLOUDINARY_CLOUD_NAME ve CLOUDINARY_UPLOAD_PRESET .env içinde doldurulmalı."
@@ -29,10 +35,22 @@ class CloudinaryUploader:
         endpoint = f"https://api.cloudinary.com/v1_1/{self.cloud_name}/video/upload"
         try:
             with video_path.open("rb") as handle:
+                encoder = MultipartEncoder(fields={
+                    "upload_preset": self.upload_preset,
+                    "resource_type": "video",
+                    "file": (video_path.name, handle, "video/mp4"),
+                })
+
+                def report_progress(monitor: MultipartEncoderMonitor) -> None:
+                    if progress_callback and monitor.len:
+                        percent = min(100, int(monitor.bytes_read * 100 / monitor.len))
+                        progress_callback(percent)
+
+                monitor = MultipartEncoderMonitor(encoder, report_progress if progress_callback else None)
                 response = self.session.post(
                     endpoint,
-                    data={"upload_preset": self.upload_preset, "resource_type": "video"},
-                    files={"file": (video_path.name, handle, "video/mp4")},
+                    data=monitor,
+                    headers={"Content-Type": monitor.content_type},
                     timeout=(15, 900),
                 )
             payload = response.json()

@@ -275,6 +275,30 @@ def _mark_failed(queue: SupabaseQueue, job: dict[str, Any], message: str) -> Non
         LOGGER.exception("Hata durumu Supabase'e yazılamadı (%s).", job.get("shortcode", "bilinmeyen"))
 
 
+class PublicationProgress:
+    """Publish-stage progress writer; telemetry failures must not cancel an Instagram publish."""
+
+    def __init__(self, queue: SupabaseQueue, job: dict[str, Any], initial_progress: int = 62) -> None:
+        self.queue = queue
+        self.job = job
+        self.last_progress = initial_progress
+        self.last_stage = ""
+
+    def __call__(self, percent: int, stage: str) -> None:
+        progress = max(self.last_progress, min(98, max(0, int(percent))))
+        safe_stage = str(stage)[:200]
+        if progress == self.last_progress and safe_stage == self.last_stage:
+            return
+        try:
+            updated = self.queue.update(self.job, progress=progress, stage=safe_stage)
+        except (QueueApiError, requests.RequestException, ValueError) as exc:
+            LOGGER.warning("Yayın ilerlemesi kaydedilemedi (%s): %s", self.job.get("shortcode", "bilinmeyen"), type(exc).__name__)
+            return
+        if updated:
+            self.last_progress = progress
+            self.last_stage = safe_stage
+
+
 def _sync_published_instagram_media(queue: SupabaseQueue, settings: Settings) -> tuple[int, int]:
     """Compare locally tracked publications with each owner's Instagram media list."""
     now = datetime.now(timezone.utc)
@@ -444,7 +468,11 @@ def run_worker() -> dict[str, int]:
             reel_file = prepare_for_reels(source_file, settings.download_dir)
             queue.update(job, progress=62, stage=f"Video hazırlandı · @{connection['username']} hesabına yükleniyor")
             caption = str(job.get("caption") or settings.default_caption).replace("{source_url}", str(job["source_url"]))
-            media_id = publisher.publish_reel(reel_file, caption)
+            media_id = publisher.publish_reel(
+                reel_file,
+                caption,
+                progress_callback=PublicationProgress(queue, job, initial_progress=62),
+            )
             published += 1
             connection = {**connection, "last_published_at": datetime.now(timezone.utc).isoformat()}
             connections[user_id] = connection
