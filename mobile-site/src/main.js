@@ -670,14 +670,6 @@ async function handleClick(event) {
   if (button.dataset.action === 'publish-now') {
     const row = state.rows.find((item) => item.id === button.dataset.id);
     if (!row || row.status !== 'queued' || row.publish_now) return;
-    const caption = String(row.caption || '').trim();
-    const captionPreview = caption
-      ? `\n\nAçıklama:\n${caption}`
-      : '\n\nAçıklama: yok.';
-    const confirmed = window.confirm(
-      `/${row.shortcode} Reel'ini bağlı Instagram hesabında hemen paylaşım önceliğine almak istiyor musun?\n\nKaynak: ${row.source_url}${captionPreview}\n\nBu Reel için seçili yayın aralığı atlanır ve bulut işçisi ayrıca tetiklenir. Devam eden bir yayın varsa sıraya girebilir. Reel yayınlandıktan sonra normal aralık yeniden başlar.`
-    );
-    if (!confirmed) return;
     button.disabled = true;
     button.textContent = 'İstek gönderiliyor…';
     const { data, error } = await supabase.rpc('request_immediate_publish', { p_id: row.id });
