@@ -214,7 +214,7 @@ function renderShell() {
                 <label class="rights-check"><input type="checkbox" id="rights-confirm" /><span>Bu videoları paylaşma hakkım var veya izin aldım.</span></label>
                 <button class="button button-primary button-wide" type="submit" id="add-submit">${icon('plus', 18)} Kuyruğa ekle <span class="button-arrow">→</span></button>
               </form>
-              <div class="privacy-note">${icon('check', 15)} URL ve açıklama taslağın bu cihazda otomatik kaydedilir; Instagram parolan burada istenmez.</div>
+              <div class="privacy-note">${icon('check', 15)} URL’ler başarıyla kuyruğa eklenince temizlenir; açıklama taslağın sonraki eklemelerde kalır ve bu cihazda saklanır. Instagram parolan burada istenmez.</div>
             </article>
             <article class="panel worker-panel" id="settings-section">
               <div class="panel-heading"><div><span class="eyebrow">YAYIN DURUMU</span><h2>Bulut bağlantıları</h2></div><span class="connection-orb ${PUBLISHER_SETUP_READY ? 'is-ready' : ''}"><i></i></span></div>
@@ -569,6 +569,7 @@ async function addToQueue(form) {
     const currentForm = document.querySelector('#add-form');
     const currentUrlInput = currentForm?.querySelector('#reel-input');
     const currentRightsInput = currentForm?.querySelector('#rights-confirm');
+    // Keep the caption for the next batch; clear only the successfully processed URL list.
     if (currentUrlInput) currentUrlInput.value = '';
     if (currentRightsInput) currentRightsInput.checked = false;
     saveReelDraft();

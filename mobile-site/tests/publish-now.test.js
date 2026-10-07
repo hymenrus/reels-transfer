@@ -15,3 +15,22 @@ test('Hemen Paylaş tek dokunuşta ilerler ve browser confirm penceresi gösterm
   assert.match(handler, /request_immediate_publish/);
   assert.match(handler, /functions\.invoke\('publish-now-trigger'/);
 });
+
+test('successful queue add clears URLs but retains and persists the caption draft', () => {
+  const start = source.indexOf('async function addToQueue(form)');
+  const end = source.indexOf('async function handleClick(event)', start);
+  assert.notEqual(start, -1, 'Kuyruğa ekleme yordamı bulunmalı');
+  assert.notEqual(end, -1, 'Kuyruğa ekleme yordamının sonu bulunmalı');
+
+  const addToQueue = source.slice(start, end);
+  const successStart = addToQueue.indexOf('if (failed === 0)');
+  const successEnd = addToQueue.indexOf('await loadQueue(true)', successStart);
+  assert.notEqual(successStart, -1, 'Başarılı ekleme dalı bulunmalı');
+  assert.notEqual(successEnd, -1, 'Başarılı ekleme dalının sonu bulunmalı');
+
+  const successBranch = addToQueue.slice(successStart, successEnd);
+  assert.match(successBranch, /currentUrlInput\.value = ''/);
+  assert.match(successBranch, /saveReelDraft\(\)/);
+  assert.doesNotMatch(successBranch, /(?:captionInput|caption-input)\.value\s*=\s*''/);
+  assert.match(source, /const draft = \{ urls: urlInput\.value, caption: captionInput\.value \}/);
+});
