@@ -108,7 +108,7 @@ Deno.serve(async (req: Request) => {
           ref: "main",
           inputs: isReelTrigger
             ? { target_reel_id: pending.id }
-            : { max_video_imports: "3" },
+            : { max_video_imports: "5" },
         }),
       },
     );

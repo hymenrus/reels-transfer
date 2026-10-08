@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { MAX_ORIGINAL_VIDEO_BYTES, formatVideoFileSize, VIDEO_STORAGE_BUCKET } from '../src/uploaded-video-utils.js';
+import { MAX_ORIGINAL_VIDEO_BYTES, MAX_VIDEO_IMPORTS_PER_BATCH, VIDEO_IMPORT_CONCURRENCY, formatVideoFileSize, mapWithConcurrency, VIDEO_STORAGE_BUCKET } from '../src/uploaded-video-utils.js';
 import { parseReelLines } from '../src/url-utils.js';
 
 const libraryMigration = await readFile(new URL('../supabase/migrations/202610080005_uploaded_video_library.sql', import.meta.url), 'utf8');
@@ -18,12 +18,28 @@ const workerTrigger = await readFile(new URL('../supabase/functions/publish-now-
  test('normalizes Instagram Reel URLs and keeps private archive size helpers', () => {
   assert.equal(MAX_ORIGINAL_VIDEO_BYTES, 50 * 1024 * 1024);
   assert.equal(VIDEO_STORAGE_BUCKET, 'reelflow-original-videos');
+  assert.equal(MAX_VIDEO_IMPORTS_PER_BATCH, 20);
+  assert.equal(VIDEO_IMPORT_CONCURRENCY, 5);
   assert.match(formatVideoFileSize(50 * 1024 * 1024), /50/);
   const parsed = parseReelLines('https://www.instagram.com/reel/ABC123/?igsh=one\nhttps://instagram.com/reels/abc123/\nhttps://instagram.com/reel/XYZ789/');
   assert.equal(parsed.items.length, 2);
   assert.equal(parsed.items[0].url, 'https://www.instagram.com/reel/ABC123/');
   assert.equal(parsed.duplicates, 1);
   assert.equal(parseReelLines('https://example.com/reel/ABC123').invalid.length, 1);
+});
+
+test('bulk URL queueing preserves order and caps concurrent requests', async () => {
+  let active = 0;
+  let maximumActive = 0;
+  const result = await mapWithConcurrency(Array.from({ length: 20 }, (_, index) => index), VIDEO_IMPORT_CONCURRENCY, async (value) => {
+    active += 1;
+    maximumActive = Math.max(maximumActive, active);
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    active -= 1;
+    return value * 2;
+  });
+  assert.equal(maximumActive, VIDEO_IMPORT_CONCURRENCY);
+  assert.deepEqual(result, Array.from({ length: 20 }, (_, index) => index * 2));
 });
 
 test('migrations keep originals private and add owner-isolated, retryable URL import jobs', () => {
@@ -53,10 +69,15 @@ test('migrations keep originals private and add owner-isolated, retryable URL im
   assert.match(schema, /45 minutes/);
 });
 
-test('PWA archives pasted Reel URLs and shows worker progress/retry without a file chooser', () => {
+test('PWA queues URL-only archive imports and supports local bulk TXT lists', () => {
   assert.match(app, /id="video-library-section"/);
   assert.match(app, /id="video-import-form"/);
   assert.match(app, /id="video-import-urls"/);
+  assert.match(app, /data-action="paste-video-import-urls"/);
+  assert.match(app, /data-action="import-url-text-file"/);
+  assert.match(app, /id="video-import-file" accept="\.txt,text\/plain"/);
+  assert.match(app, /Tek seferde en fazla \$\{MAX_VIDEO_IMPORTS_PER_BATCH\}/);
+  assert.match(app, /VIDEO_IMPORT_CONCURRENCY/);
   assert.match(app, /p_source_url: item\.url/);
   assert.match(app, /p_expected_user_id: userId/);
   assert.match(app, /video_import_id: addedImportIds\[0\]/);
@@ -70,7 +91,7 @@ test('PWA archives pasted Reel URLs and shows worker progress/retry without a fi
   assert.match(app, /data-action="preview-uploaded-video"/);
   assert.match(app, /data-action="queue-uploaded-video"/);
   assert.match(app, /createSignedUrl/);
-  assert.doesNotMatch(app, /type="file"|tus-js-client|video-upload-form/);
+  assert.doesNotMatch(app, /tus-js-client|video-upload-form/);
 });
 
 test('scheduled worker downloads accessible Instagram Reels into the private owner bucket', () => {
@@ -81,10 +102,9 @@ test('scheduled worker downloads accessible Instagram Reels into the private own
   assert.match(worker, /finish_video_import/);
   assert.match(worker, /fail_video_import/);
   assert.match(worker, /reelflow-original-videos/);
-  assert.match(workflow, /max_video_imports:[\s\S]*options: \['1', '3'\]/);
-  assert.match(workflow, /MAX_VIDEO_IMPORTS_PER_RUN:.*inputs\.max_video_imports/);
-  assert.match(workflow, /'1'\s*\}\}/);
+  assert.match(workflow, /max_video_imports:[\s\S]*options: \['1', '3', '5'\]/);
+  assert.match(workflow, /MAX_VIDEO_IMPORTS_PER_RUN:.*inputs\.max_video_imports \|\| '3'/);
   assert.match(workerTrigger, /video_import_id/);
   assert.match(workerTrigger, /from\("video_import_jobs"\)[\s\S]*eq\("user_id", user\.id\)/);
-  assert.match(workerTrigger, /max_video_imports: "3"/);
+  assert.match(workerTrigger, /max_video_imports: "5"/);
 });

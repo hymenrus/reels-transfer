@@ -3,7 +3,7 @@ import { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, PUBLISHER_SETUP_READY } from '.
 import { estimateQueueEta, pruneReelAccountTargets, pruneReelCaptionTemplateSelections, resolveReelTargetAssignments, selectInstagramAccount, setReelAccountTarget } from './queue-utils.js';
 import { captionForAccount, captionForReelUrl, hasReelDraftContent, setCaptionForAccount, setTagsForAccount, tagsForAccount, validateCaptionTemplate } from './caption-utils.js';
 import { parseReelLines } from './url-utils.js';
-import { formatVideoFileSize, VIDEO_STORAGE_BUCKET } from './uploaded-video-utils.js';
+import { formatVideoFileSize, mapWithConcurrency, MAX_VIDEO_IMPORTS_PER_BATCH, VIDEO_IMPORT_CONCURRENCY, VIDEO_STORAGE_BUCKET } from './uploaded-video-utils.js';
 import './styles.css';
 
 const root = document.querySelector('#app');
@@ -256,7 +256,8 @@ function renderShell() {
             <form id="video-import-form" class="video-import-form">
               <label for="video-import-urls">Arşive kaydedilecek Instagram Reel bağlantıları</label>
               <textarea id="video-import-urls" rows="3" required placeholder="Her satıra bir Instagram Reel URL’si yapıştır\nhttps://www.instagram.com/reel/…/"></textarea>
-              <small class="video-upload-note">Bağlantıları bulut işçisi işler; herkese açık ve erişilebilir Reels videoları özel arşive indirilir. Dosyalar en fazla 50 MB olabilir. Bazı Instagram bağlantıları erişim kısıtı nedeniyle indirilemeyebilir.</small>
+              <div class="video-import-tools"><button type="button" class="mini-button" data-action="paste-video-import-urls">Panodan URL yapıştır</button><button type="button" class="mini-button" data-action="import-url-text-file">TXT listesi seç</button><input type="file" id="video-import-file" accept=".txt,text/plain" hidden /><small id="video-import-counter" class="video-import-counter" aria-live="polite">0 / 20 URL</small></div>
+              <small class="video-upload-note">Her satıra bir Reel URL’si; tek seferde en fazla 20 bağlantı. TXT listesi yalnızca bu cihazda okunur, sunucuya yüklenmez. İşçi bir çalıştırmada en fazla 5 URL işler; kalanlar kuyrukta devam eder. Dosya başına sınır 50 MB.</small>
               <label class="rights-check video-import-rights"><input id="video-import-rights" type="checkbox" /><span>Bu videoları saklama ve paylaşma hakkım var veya izin aldım.</span></label>
               <button class="button button-primary" type="submit" id="video-import-submit">${icon('plus', 17)} Buluta kaydet</button>
             </form>
@@ -723,42 +724,54 @@ async function enqueueVideoImports(form) {
     toast(parsed.invalid[0]?.reason || 'Arşive eklemek için bir Instagram Reel URL’si gir.', 'warn');
     return;
   }
+  if (parsed.items.length > MAX_VIDEO_IMPORTS_PER_BATCH) {
+    toast(`Tek seferde en fazla ${MAX_VIDEO_IMPORTS_PER_BATCH} farklı URL ekleyebilirsin. Listeyi bölüp tekrar dene.`, 'warn');
+    return;
+  }
   if (!rights?.checked) {
     toast('Devam etmek için videoları saklama/paylaşma hakkını onayla.', 'warn');
     rights?.focus();
     return;
   }
   state.videoImportBusy = true;
-  if (button) { button.disabled = true; button.textContent = 'Buluta gönderiliyor…'; }
-  let added = 0;
-  const addedImportIds = [];
+  form.querySelectorAll('button, textarea, input').forEach((control) => { control.disabled = true; });
+  if (button) button.textContent = `Kuyruğa ekleniyor 0/${parsed.items.length}…`;
   let duplicate = parsed.duplicates;
   let failed = parsed.invalid.length;
-  for (const item of parsed.items) {
-    if (authUserGeneration !== userGeneration || state.session?.user?.id !== userId) return;
-    let result;
+  let completed = 0;
+  const results = await mapWithConcurrency(parsed.items, VIDEO_IMPORT_CONCURRENCY, async (item) => {
     try {
-      result = await supabase.rpc('enqueue_video_import', {
+      if (authUserGeneration !== userGeneration || state.session?.user?.id !== userId) return { kind: 'stale' };
+      const { data, error } = await supabase.rpc('enqueue_video_import', {
         p_source_url: item.url,
         p_rights_confirmed: true,
         p_expected_user_id: userId,
       });
+      if (error) {
+        return error.code === '23505' || /video_import_duplicate|already archived/i.test(error.message || '')
+          ? { kind: 'duplicate' }
+          : { kind: 'failed' };
+      }
+      return data ? { kind: 'added', id: typeof data === 'string' ? data : '' } : { kind: 'duplicate' };
     } catch {
-      failed += 1;
-      continue;
+      return { kind: 'failed' };
+    } finally {
+      completed += 1;
+      if (button && authUserGeneration === userGeneration && state.session?.user?.id === userId) {
+        button.textContent = `Kuyruğa ekleniyor ${completed}/${parsed.items.length}…`;
+      }
     }
-    const { data, error } = result || {};
-    if (error) {
-      if (error.code === '23505' || /video_import_duplicate|already archived/i.test(error.message || '')) duplicate += 1;
-      else failed += 1;
-    } else if (data) {
-      added += 1;
-      if (typeof data === 'string') addedImportIds.push(data);
-    } else {
-      duplicate += 1;
-    }
-  }
+  });
   if (authUserGeneration !== userGeneration || state.session?.user?.id !== userId) return;
+  let added = 0;
+  const addedImportIds = [];
+  for (const result of results) {
+    if (result?.kind === 'added') {
+      added += 1;
+      if (result.id) addedImportIds.push(result.id);
+    } else if (result?.kind === 'duplicate') duplicate += 1;
+    else if (result?.kind === 'failed') failed += 1;
+  }
   let workerTriggered = false;
   if (addedImportIds.length) {
     if (button) button.textContent = 'Bulut işçisi başlatılıyor…';
@@ -773,19 +786,54 @@ async function enqueueVideoImports(form) {
     if (authUserGeneration !== userGeneration || state.session?.user?.id !== userId) return;
   }
   state.videoImportBusy = false;
-  if (button) { button.disabled = false; button.innerHTML = `${icon('plus', 17)} Buluta kaydet`; }
   if (failed === 0) {
     if (input) input.value = '';
     if (rights) rights.checked = false;
+    updateVideoImportCounter();
   }
+  form.querySelectorAll('button, textarea, input').forEach((control) => { control.disabled = false; });
+  if (button) button.innerHTML = `${icon('plus', 17)} Buluta kaydet`;
   await loadUploadedVideos(true);
   const parts = [];
   if (added) parts.push(`${added} Reel bulut indirme kuyruğuna eklendi`);
-  if (added) parts.push(workerTriggered ? 'Bulut işçisi şimdi tetiklendi' : 'Otomatik işçi turunda indirilecek');
+  if (added) parts.push(workerTriggered ? 'Bulut işçisi tetiklendi (tur başına en çok 5 URL; kalanı kuyrukta)' : 'Otomatik işçi turunda indirilecek');
   if (duplicate) parts.push(`${duplicate} zaten arşivde veya sırada`);
   if (failed) parts.push(`${failed} bağlantı eklenemedi`);
   toast(parts.join(' · ') || 'Arşiv kuyruğu değişmedi.', failed ? 'warn' : 'success');
   if (failed && parsed.invalid[0]?.reason) toast(parsed.invalid[0].reason, 'warn');
+}
+
+function updateVideoImportCounter() {
+  const input = document.querySelector('#video-import-urls');
+  const counter = document.querySelector('#video-import-counter');
+  if (!input || !counter) return;
+  const count = parseReelLines(input.value).items.length;
+  counter.textContent = `${count} / ${MAX_VIDEO_IMPORTS_PER_BATCH} URL`;
+  counter.classList.toggle('is-over-limit', count > MAX_VIDEO_IMPORTS_PER_BATCH);
+}
+
+function appendVideoImportText(rawText) {
+  const input = document.querySelector('#video-import-urls');
+  const text = String(rawText || '').replace(/^\uFEFF/, '').trim();
+  if (!input || !text) {
+    toast('Metinde eklenecek URL bulunamadı.', 'warn');
+    return;
+  }
+  if (text.length > 1024 * 1024) {
+    toast('URL listesi 1 MB’tan küçük olmalı.', 'warn');
+    return;
+  }
+  const combined = [input.value.trim(), text].filter(Boolean).join('\n');
+  const beforeCount = parseReelLines(input.value).items.length;
+  const parsed = parseReelLines(combined);
+  if (parsed.items.length > MAX_VIDEO_IMPORTS_PER_BATCH) {
+    toast(`Tek seferde en fazla ${MAX_VIDEO_IMPORTS_PER_BATCH} farklı URL ekleyebilirsin. Listeyi böl.`, 'warn');
+    return;
+  }
+  input.value = combined;
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  const addedCount = Math.max(0, parsed.items.length - beforeCount);
+  toast(addedCount ? `${addedCount} URL toplu listeye eklendi.` : 'Bu listedeki URL’ler zaten ekli veya geçersiz.', addedCount ? 'success' : 'info');
 }
 
 async function retryVideoImport(importId) {
@@ -1326,6 +1374,18 @@ async function handleClick(event) {
     await retryVideoImport(button.dataset.id);
     return;
   }
+  if (button.dataset.action === 'paste-video-import-urls') {
+    try {
+      appendVideoImportText(await navigator.clipboard.readText());
+    } catch {
+      toast('Panoya erişim izni verilmedi. URL listesini kutuya yapıştırabilirsin.', 'warn');
+    }
+    return;
+  }
+  if (button.dataset.action === 'import-url-text-file') {
+    document.querySelector('#video-import-file')?.click();
+    return;
+  }
   if (button.id === 'instagram-disconnect-button') {
     await disconnectInstagram();
     return;
@@ -1501,6 +1561,7 @@ root.addEventListener('submit', async (event) => {
 });
 root.addEventListener('input', (event) => {
   if (event.target.id === 'queue-search') renderQueue();
+  if (event.target.id === 'video-import-urls') updateVideoImportCounter();
   if (event.target.id === 'reel-input') {
     renderReelTargetAssignments();
     saveReelDraft();
@@ -1509,6 +1570,21 @@ root.addEventListener('input', (event) => {
   if (event.target.matches('[data-video-caption], [data-video-tags]')) saveVideoCardDraft(event.target.closest('[data-video-card]'));
 });
 root.addEventListener('change', async (event) => {
+  if (event.target.id === 'video-import-file') {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    if (file.size > 1024 * 1024) {
+      toast('TXT listesi 1 MB’tan küçük olmalı.', 'warn');
+      return;
+    }
+    try {
+      appendVideoImportText(await file.text());
+    } catch {
+      toast('TXT listesi okunamadı. UTF-8 metin dosyası seçip tekrar dene.', 'warn');
+    }
+    return;
+  }
   if (event.target.matches('[data-video-account-select]')) {
     saveVideoCardDraft(event.target.closest('[data-video-card]'));
     return;
