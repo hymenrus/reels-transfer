@@ -51,6 +51,7 @@ class SupabaseQueue:
         self.accounts_url = base + "/instagram_accounts"
         self.credentials_url = base + "/instagram_credentials"
         self.video_import_jobs_url = base + "/video_import_jobs"
+        self.video_cover_images_url = base + "/video_cover_images"
         self.rpc_url = base + "/rpc"
         self.storage_url = self.project_url + "/storage/v1"
         self.temporary_video_objects_url = base + "/worker_temporary_video_objects"
@@ -72,7 +73,7 @@ class SupabaseQueue:
 
     def queued(self, limit: int, target_job_id: str | None = None) -> list[dict[str, Any]]:
         filters = {
-            "select": "id,user_id,instagram_account_id,uploaded_video_id,shortcode,source_url,caption,status,progress,attempts,rights_confirmed,publish_now,created_at",
+            "select": "id,user_id,instagram_account_id,uploaded_video_id,cover_image_id,shortcode,source_url,caption,status,progress,attempts,rights_confirmed,publish_now,created_at",
             "status": "eq.queued",
             "order": "publish_now.desc,created_at.asc",
             "limit": str(max(1, min(limit, 200))),
@@ -174,6 +175,66 @@ class SupabaseQueue:
         finally:
             if response is not None:
                 response.close()
+
+    def signed_cover_image(self, job: dict[str, Any], expires_seconds: int = 14400) -> str:
+        user_id = str(job.get("user_id") or "")
+        cover_id = str(job.get("cover_image_id") or "")
+        if not user_id or not cover_id:
+            raise QueueApiError("Reels kapağı için sahip veya görsel kimliği bulunamadı.")
+        params = urlencode({
+            "select": "id,user_id,storage_path,mime_type,size_bytes,cleanup_pending",
+            "id": f"eq.{cover_id}",
+            "user_id": f"eq.{user_id}",
+            "limit": "1",
+        })
+        try:
+            response = self.session.get(self.video_cover_images_url + "?" + params, timeout=30)
+        except requests.RequestException as exc:
+            raise QueueApiError("Özel kapak görseli bilgisi alınamadı (ağ hatası).") from exc
+        rows = self._rows(response, "özel Reels kapağı")
+        if not rows:
+            raise QueueApiError("Seçilen özel Reels kapağı bulunamadı.")
+        cover = rows[0]
+        path = str(cover.get("storage_path") or "")
+        try:
+            size_bytes = int(cover.get("size_bytes") or 0)
+        except (TypeError, ValueError) as exc:
+            raise QueueApiError("Özel Reels kapağının dosya boyutu geçersiz.") from exc
+        if (cover.get("cleanup_pending") or cover.get("mime_type") != "image/jpeg"
+                or size_bytes < 1 or size_bytes > 8 * 1024 * 1024
+                or not re.fullmatch(r"[0-9a-fA-F-]{36}/[0-9a-f]{32}\.jpg", path)
+                or path.split("/", 1)[0].lower() != user_id.lower()):
+            raise QueueApiError("Özel Reels kapağının sahibi, yolu veya biçimi geçersiz.")
+        object_url = f"{self.storage_url}/object/sign/reelflow-cover-images/{quote(path, safe='/')}"
+        try:
+            signed_response = self.session.post(
+                object_url, json={"expiresIn": max(600, min(int(expires_seconds), 604800))}, timeout=30,
+            )
+        except requests.RequestException as exc:
+            raise QueueApiError("Meta için süreli kapak bağlantısı üretilemedi (ağ hatası).") from exc
+        if not signed_response.ok:
+            raise QueueApiError(f"Meta için süreli kapak bağlantısı üretilemedi: HTTP {signed_response.status_code}")
+        try:
+            payload = signed_response.json()
+        except ValueError as exc:
+            raise QueueApiError("Süreli kapak bağlantısı yanıtı geçersiz.") from exc
+        signed = str(payload.get("signedURL") or payload.get("signedUrl") or "") if isinstance(payload, dict) else ""
+        if signed.startswith("https://"):
+            signed_url = signed
+        elif signed.startswith("/storage/v1/"):
+            signed_url = self.project_url + signed
+        elif signed.startswith("/object/"):
+            signed_url = self.storage_url + signed
+        elif signed.startswith("object/"):
+            signed_url = self.storage_url + "/" + signed
+        else:
+            raise QueueApiError("Süreli kapak bağlantısı HTTPS adresi değil.")
+        parsed = urlsplit(signed_url)
+        expected_path = f"/storage/v1/object/sign/reelflow-cover-images/{quote(path, safe='/')}"
+        if (parsed.scheme != "https" or parsed.netloc != urlsplit(self.project_url).netloc
+                or parsed.path != expected_path or "token=" not in parsed.query):
+            raise QueueApiError("Süreli kapak bağlantısının kapsamı doğrulanamadı.")
+        return signed_url
 
     def claim_uploaded_video_cleanups(self, limit: int = 50) -> list[dict[str, Any]]:
         try:
@@ -1156,6 +1217,7 @@ def run_worker() -> dict[str, int]:
         source_file: Path | None = None
         reel_file: Path | None = None
         temporary_storage_path: str | None = None
+        cover_url: str | None = None
         try:
             queue.mark_processed(account_id)
             connection = _active_connection(queue, connection)
@@ -1192,14 +1254,16 @@ def run_worker() -> dict[str, int]:
                 queue.update(job, progress=35, stage="Video indirildi · dikey formata hazırlanıyor")
                 reel_file = prepare_for_reels(source_file, settings.download_dir)
                 queue.update(job, progress=62, stage=f"Video hazırlandı · @{connection['username']} hesabına yükleniyor")
+            if job.get("cover_image_id"):
+                cover_url = queue.signed_cover_image(job)
             caption = str(job.get("caption") or settings.default_caption).replace("{source_url}", source_url)
             progress_callback = PublicationProgress(queue, job, initial_progress=62)
+            publish_kwargs: dict[str, Any] = {"progress_callback": progress_callback}
             if public_video_url:
-                media_id = publisher.publish_reel(
-                    reel_file, caption, progress_callback=progress_callback, public_video_url=public_video_url,
-                )
-            else:
-                media_id = publisher.publish_reel(reel_file, caption, progress_callback=progress_callback)
+                publish_kwargs["public_video_url"] = public_video_url
+            if cover_url:
+                publish_kwargs["cover_url"] = cover_url
+            media_id = publisher.publish_reel(reel_file, caption, **publish_kwargs)
             if temporary_storage_path:
                 try:
                     queue.delete_temporary_video(temporary_storage_path)

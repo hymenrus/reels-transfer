@@ -45,6 +45,7 @@ class InstagramPublisher:
     ) -> None:
         self._token = access_token
         self._private_video_url: str | None = None
+        self._private_cover_url: str | None = None
         self._ig_user_id = ig_user_id
         self._graph_version = graph_version
         self._api_mode = api_mode
@@ -75,6 +76,8 @@ class InstagramPublisher:
             text = str(detail)
             if self._private_video_url:
                 text = text.replace(self._private_video_url, "[SIGNED_VIDEO_URL]")
+            if self._private_cover_url:
+                text = text.replace(self._private_cover_url, "[SIGNED_COVER_URL]")
             text = text.replace(self._token, "[TOKEN]")
             raise InstagramApiError(f"HTTP {response.status_code}: {text}")
         return payload
@@ -249,12 +252,19 @@ class InstagramPublisher:
             progress_callback(82, "Geçici video aktarımı tamamlandı")
         return url
 
-    def create_reel_container(self, caption: str, video_url: str | None = None) -> tuple[str, str | None]:
+    def create_reel_container(
+        self,
+        caption: str,
+        video_url: str | None = None,
+        cover_url: str | None = None,
+    ) -> tuple[str, str | None]:
         if len(caption) > MAX_CAPTION_LENGTH:
             raise InstagramApiError(f"Açıklama {MAX_CAPTION_LENGTH} karakteri aşıyor.")
         form: dict[str, str] = {"media_type": "REELS"}
         if caption:
             form["caption"] = caption
+        if cover_url:
+            form["cover_url"] = cover_url
         if self._api_mode == "instagram_login":
             if not video_url:
                 raise InstagramApiError("Instagram Login için herkese açık video URL'si gerekli.")
@@ -326,7 +336,13 @@ class InstagramPublisher:
         caption: str,
         progress_callback: Callable[[int, str], None] | None = None,
         public_video_url: str | None = None,
+        cover_url: str | None = None,
     ) -> str:
+        if cover_url:
+            parsed_cover = urlsplit(cover_url)
+            if (parsed_cover.scheme != "https" or not parsed_cover.hostname or parsed_cover.username
+                    or parsed_cover.password or parsed_cover.fragment):
+                raise InstagramApiError("Instagram için verilen süreli kapak bağlantısı güvenli değil.")
         public_url = None
         if self._api_mode == "instagram_login":
             if public_video_url:
@@ -343,8 +359,10 @@ class InstagramPublisher:
             progress_callback(84, "Instagram Reels bilgileri hazırlanıyor")
         if public_video_url:
             self._private_video_url = public_video_url
+        if cover_url:
+            self._private_cover_url = cover_url
         try:
-            container_id, upload_uri = self.create_reel_container(caption, public_url)
+            container_id, upload_uri = self.create_reel_container(caption, public_url, cover_url)
             self.upload_video(upload_uri, video_path)
             self.wait_until_ready(container_id, progress_callback)
             if progress_callback:
@@ -355,6 +373,7 @@ class InstagramPublisher:
             return media_id
         finally:
             self._private_video_url = None
+            self._private_cover_url = None
 
 
 def refresh_long_lived_token(

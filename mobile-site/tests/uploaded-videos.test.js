@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { MAX_ORIGINAL_VIDEO_BYTES, MAX_VIDEO_IMPORTS_PER_BATCH, VIDEO_IMPORT_CONCURRENCY, formatVideoFileSize, mapWithConcurrency, VIDEO_STORAGE_BUCKET } from '../src/uploaded-video-utils.js';
+import { MAX_ORIGINAL_VIDEO_BYTES, MAX_VIDEO_IMPORTS_PER_BATCH, VIDEO_IMPORT_CONCURRENCY, formatVideoFileSize, mapWithConcurrency, VIDEO_STORAGE_BUCKET, VIDEO_COVER_BUCKET, MAX_COVER_IMAGE_BYTES, MAX_COVER_IMAGES_PER_BATCH, coverImageStoragePath, createCoverImageId, validateCoverImageFile } from '../src/uploaded-video-utils.js';
 import { parseReelLines } from '../src/url-utils.js';
 
 const libraryMigration = await readFile(new URL('../supabase/migrations/202610080005_uploaded_video_library.sql', import.meta.url), 'utf8');
@@ -9,6 +9,8 @@ const safetyMigration = await readFile(new URL('../supabase/migrations/202610080
 const importMigration = await readFile(new URL('../supabase/migrations/202610080007_instagram_url_archive_import.sql', import.meta.url), 'utf8');
 const recoveryMigration = await readFile(new URL('../supabase/migrations/202610080008_recover_stale_video_imports.sql', import.meta.url), 'utf8');
 const hardeningMigration = await readFile(new URL('../supabase/migrations/202610080009_private_url_import_hardening.sql', import.meta.url), 'utf8');
+const coverQuotaMigration = await readFile(new URL('../supabase/migrations/202610080010_storage_quota_and_reel_covers.sql', import.meta.url), 'utf8');
+const coverPolicyFixMigration = await readFile(new URL('../supabase/migrations/202610080011_fix_cover_storage_path_policy.sql', import.meta.url), 'utf8');
 const schema = await readFile(new URL('../supabase/schema.sql', import.meta.url), 'utf8');
 const app = await readFile(new URL('../src/main.js', import.meta.url), 'utf8');
 const worker = await readFile(new URL('../../reels_transfer/github_worker.py', import.meta.url), 'utf8');
@@ -26,6 +28,20 @@ const workerTrigger = await readFile(new URL('../supabase/functions/publish-now-
   assert.equal(parsed.items[0].url, 'https://www.instagram.com/reel/ABC123/');
   assert.equal(parsed.duplicates, 1);
   assert.equal(parseReelLines('https://example.com/reel/ABC123').invalid.length, 1);
+});
+
+test('validates a private batch of JPEG cover images without changing the 20-Reel batch cap', () => {
+  assert.equal(MAX_VIDEO_IMPORTS_PER_BATCH, 20);
+  assert.equal(VIDEO_COVER_BUCKET, 'reelflow-cover-images');
+  assert.equal(MAX_COVER_IMAGE_BYTES, 8 * 1024 * 1024);
+  assert.equal(MAX_COVER_IMAGES_PER_BATCH, 20);
+  assert.equal(validateCoverImageFile({ type: 'image/jpeg', size: 100 }), '');
+  assert.match(validateCoverImageFile({ type: 'image/png', size: 100 }), /JPEG/);
+  assert.match(validateCoverImageFile({ type: 'image/jpeg', size: MAX_COVER_IMAGE_BYTES + 1 }), /8 MB/);
+  assert.equal(coverImageStoragePath('123e4567-e89b-42d3-a456-426614174000', '123e4567-e89b-42d3-a456-426614174001'), '123e4567-e89b-42d3-a456-426614174000/123e4567e89b42d3a456426614174001.jpg');
+  assert.throws(() => coverImageStoragePath('someone-else', 'bad-id'), /geçersiz/);
+  const fallbackId = createCoverImageId({ getRandomValues: (bytes) => { bytes.fill(1); return bytes; } });
+  assert.match(fallbackId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
 });
 
 test('bulk URL queueing preserves order and caps concurrent requests', async () => {
@@ -65,6 +81,17 @@ test('migrations keep originals private and add owner-isolated, retryable URL im
   assert.match(hardeningMigration, /active_storage_path/);
   assert.match(hardeningMigration, /p_expected_user_id IS DISTINCT FROM v_user_id/);
   assert.match(hardeningMigration, /storage_object_still_exists/);
+  assert.match(coverQuotaMigration, /CREATE OR REPLACE FUNCTION public\.reelflow_storage_usage/);
+  assert.match(coverQuotaMigration, /FROM storage\.objects AS o/);
+  assert.match(coverQuotaMigration, /'reelflow-cover-images'[\s\S]*false[\s\S]*8388608/);
+  assert.match(coverQuotaMigration, /CREATE TABLE IF NOT EXISTS public\.video_cover_images/);
+  assert.match(coverQuotaMigration, /CREATE POLICY "ReelFlow users read their own private Reel covers"/);
+  assert.match(coverQuotaMigration, /enqueue_uploaded_video_with_cover/);
+  assert.match(coverQuotaMigration, /claim_video_cover_cleanup/);
+  assert.match(coverQuotaMigration, /finish_video_cover_cleanup/);
+  assert.match(coverQuotaMigration, /cleanup_pending/);
+  assert.match(coverQuotaMigration, /cover_image_id/);
+  assert.match(coverPolicyFixMigration, /\[0-9a-f\]\{32\}\[\.\]jpg\$/);
   assert.match(schema, /CREATE TABLE IF NOT EXISTS public\.video_import_jobs/);
   assert.match(schema, /45 minutes/);
 });
@@ -99,6 +126,14 @@ test('PWA queues URL-only archive imports and supports local bulk TXT lists', ()
   assert.match(app, /data-action="preview-uploaded-video"/);
   assert.match(app, /data-action="queue-uploaded-video"/);
   assert.match(app, /createSignedUrl/);
+  assert.match(app, /createSignedUrls/);
+  assert.match(app, /reelflow_storage_usage/);
+  assert.match(app, /Kalan \$\{formatStorageGigabytes\(left\)\} GB/);
+  assert.match(app, /id="video-cover-files"[^>]*multiple/);
+  assert.match(app, /data-video-cover-select/);
+  assert.match(app, /enqueue_uploaded_video_with_cover/);
+  assert.match(app, /p_cover_image_id:/);
+  assert.match(app, /refresh-storage-usage/);
   assert.doesNotMatch(app, /tus-js-client|video-upload-form/);
 });
 
@@ -110,6 +145,10 @@ test('scheduled worker downloads accessible Instagram Reels into the private own
   assert.match(worker, /finish_video_import/);
   assert.match(worker, /fail_video_import/);
   assert.match(worker, /reelflow-original-videos/);
+  assert.match(worker, /signed_cover_image/);
+  assert.match(worker, /reelflow-cover-images/);
+  assert.match(worker, /cover_image_id/);
+  assert.match(worker, /publish_kwargs\["cover_url"\]/);
   assert.match(workflow, /max_video_imports:[\s\S]*options: \['1', '3', '5'\]/);
   assert.match(workflow, /MAX_VIDEO_IMPORTS_PER_RUN:.*inputs\.max_video_imports \|\| '3'/);
   assert.match(workerTrigger, /video_import_id/);

@@ -16,6 +16,9 @@ OBJECT_PATH = f"{USER_ID}/saved-original.mp4"
 SIGNED_PATH = f"/object/sign/reelflow-original-videos/{OBJECT_PATH}?token=short-lived-token"
 TEMPORARY_PATH = "worker-temp/0123456789abcdef0123456789abcdef.mp4"
 SIGNED_TEMPORARY_PATH = f"/object/sign/reelflow-original-videos/{TEMPORARY_PATH}?token=short-lived-token"
+COVER_ID = "123e4567-e89b-42d3-a456-426614174002"
+COVER_PATH = f"{USER_ID}/{COVER_ID.replace('-', '')}.jpg"
+SIGNED_COVER_PATH = f"/object/sign/reelflow-cover-images/{COVER_PATH}?token=short-lived-cover-token"
 
 
 class Response:
@@ -118,6 +121,50 @@ def test_private_video_download_rejects_wrong_owner_path() -> None:
 
     with pytest.raises(QueueApiError, match="geçerli değil"):
         queue.signed_uploaded_video({"user_id": USER_ID, "uploaded_video_id": VIDEO_ID})
+
+
+def test_selected_cover_uses_owner_scoped_short_lived_signed_url() -> None:
+    cover = {
+        "id": COVER_ID,
+        "user_id": USER_ID,
+        "storage_path": COVER_PATH,
+        "mime_type": "image/jpeg",
+        "size_bytes": 1024,
+        "cleanup_pending": False,
+    }
+    rest = RestSession(
+        gets=[Response([cover])],
+        posts=[Response({"signedURL": SIGNED_COVER_PATH})],
+    )
+    queue = SupabaseQueue(PROJECT_URL, "service-secret", session=rest)
+
+    signed_url = queue.signed_cover_image({
+        "user_id": USER_ID,
+        "cover_image_id": COVER_ID,
+    })
+
+    assert signed_url == f"{PROJECT_URL}/storage/v1{SIGNED_COVER_PATH}"
+    assert "service-secret" not in signed_url
+    assert rest.calls[0][1].endswith("/video_cover_images?") or "/video_cover_images?" in rest.calls[0][1]
+    assert rest.calls[1][1].endswith(f"/object/sign/reelflow-cover-images/{COVER_PATH}")
+    assert rest.calls[1][2]["json"]["expiresIn"] == 14400
+
+
+def test_selected_cover_rejects_another_users_storage_path() -> None:
+    cover = {
+        "id": COVER_ID,
+        "user_id": USER_ID,
+        "storage_path": f"{VIDEO_ID}/{COVER_ID.replace('-', '')}.jpg",
+        "mime_type": "image/jpeg",
+        "size_bytes": 1024,
+        "cleanup_pending": False,
+    }
+    rest = RestSession(gets=[Response([cover])])
+    queue = SupabaseQueue(PROJECT_URL, "service-secret", session=rest)
+
+    with pytest.raises(QueueApiError, match="sahibi, yolu veya biçimi geçersiz"):
+        queue.signed_cover_image({"user_id": USER_ID, "cover_image_id": COVER_ID})
+    assert len(rest.calls) == 1
 
 
 def test_converted_private_video_uses_a_scoped_supabase_signed_url(tmp_path: Path, monkeypatch) -> None:

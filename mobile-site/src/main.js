@@ -3,19 +3,21 @@ import { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, PUBLISHER_SETUP_READY } from '.
 import { estimateQueueEta, pruneReelAccountTargets, pruneReelCaptionTemplateSelections, resolveReelTargetAssignments, selectInstagramAccount, setReelAccountTarget } from './queue-utils.js';
 import { captionForAccount, captionForReelUrl, hasReelDraftContent, setCaptionForAccount, setTagsForAccount, tagsForAccount, validateCaptionTemplate } from './caption-utils.js';
 import { parseReelLines } from './url-utils.js';
-import { formatVideoFileSize, mapWithConcurrency, MAX_VIDEO_IMPORTS_PER_BATCH, VIDEO_IMPORT_CONCURRENCY, VIDEO_STORAGE_BUCKET } from './uploaded-video-utils.js';
+import { formatVideoFileSize, mapWithConcurrency, MAX_VIDEO_IMPORTS_PER_BATCH, VIDEO_IMPORT_CONCURRENCY, VIDEO_STORAGE_BUCKET, VIDEO_COVER_BUCKET, MAX_COVER_IMAGES_PER_BATCH, coverImageStoragePath, createCoverImageId, validateCoverImageFile } from './uploaded-video-utils.js';
 import './styles.css';
 
 const root = document.querySelector('#app');
 const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
 });
-const state = { session: null, rows: [], instagram: null, instagramAccounts: [], reelAccountTargets: {}, reelCaptionTemplateSelections: {}, captionTemplates: [], captionTemplatesLoading: false, captionTemplatesError: '', selectedCaptionTemplateId: '', uploadedVideos: [], videoImports: [], uploadedVideosLoading: false, uploadedVideosError: '', uploadedVideoDrafts: {}, uploadedVideoDraftsUserId: '', videoImportBusy: false, videoImportFilter: 'all', videoLibraryFilter: '', preferNewestInstagramAccount: false, instagramConnectionMessage: null, filter: 'all', theme: localStorage.getItem('reelflow-theme') || 'dark', installPrompt: null, busy: false };
+const state = { session: null, rows: [], instagram: null, instagramAccounts: [], reelAccountTargets: {}, reelCaptionTemplateSelections: {}, captionTemplates: [], captionTemplatesLoading: false, captionTemplatesError: '', selectedCaptionTemplateId: '', uploadedVideos: [], videoImports: [], videoCoverImages: [], videoCoverImagesError: '', videoCoverUploadBusy: false, videoStorageUsage: null, uploadedVideosLoading: false, uploadedVideosError: '', uploadedVideoDrafts: {}, uploadedVideoDraftsUserId: '', videoImportBusy: false, videoImportFilter: 'all', videoLibraryFilter: '', preferNewestInstagramAccount: false, instagramConnectionMessage: null, filter: 'all', theme: localStorage.getItem('reelflow-theme') || 'dark', installPrompt: null, busy: false };
 let instagramAccountLoadGeneration = 0;
 let captionTemplateLoadGeneration = 0;
 let videoLibraryLoadGeneration = 0;
 let idleQueueRefreshTicks = 0;
 let videoImportRefreshTicks = 0;
+let videoStorageRefreshTicks = 0;
+let videoStorageLoadGeneration = 0;
 let authUserGeneration = 0;
 document.documentElement.dataset.theme = state.theme;
 
@@ -257,7 +259,11 @@ function renderShell() {
           <section class="panel video-library-panel" id="video-library-section">
             <div class="panel-heading"><div><span class="eyebrow">ÖZEL BULUT ARŞİVİ</span><h2>Video arşivi <span id="video-library-count" class="queue-count">0</span></h2></div><span class="heading-icon">${icon('play', 19)}</span></div>
             <p class="panel-copy">Instagram Reel bağlantısını ekle; ReelFlow videoyu bulut işçisiyle özel arşivine indirir. Telefona indirmeden oynatabilir, istediğin zaman kuyruğa gönderebilirsin.</p>
-            <div id="video-library-quota" class="video-library-quota">Supabase Free kotası: proje genelinde 1 GB · dosya başına en fazla 50 MB.</div>
+            <div id="video-library-quota" class="video-library-quota">
+              <div class="video-storage-usage-row"><div><strong id="video-storage-remaining">Depolama ölçülüyor…</strong><small id="video-storage-detail">Supabase Free proje kotası · 1 GB</small></div><button type="button" class="mini-button" data-action="refresh-storage-usage">Yenile</button></div>
+              <div class="video-storage-meter" role="progressbar" aria-label="Proje depolama kullanımı" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="video-storage-meter-fill"></span></div>
+              <small id="video-storage-updated">Kullanım proje genelinde ve ortak depolama alanında ölçülür.</small>
+            </div>
             <form id="video-import-form" class="video-import-form">
               <label for="video-import-urls">Arşive kaydedilecek Instagram Reel bağlantıları</label>
               <textarea id="video-import-urls" rows="3" required placeholder="Her satıra bir Instagram Reel URL’si yapıştır\nhttps://www.instagram.com/reel/…/"></textarea>
@@ -266,6 +272,11 @@ function renderShell() {
               <label class="rights-check video-import-rights"><input id="video-import-rights" type="checkbox" /><span>Bu videoları saklama ve paylaşma hakkım var veya izin aldım.</span></label>
               <button class="button button-primary" type="submit" id="video-import-submit">${icon('plus', 17)} Buluta kaydet</button>
             </form>
+            <section class="video-covers-panel" aria-labelledby="video-covers-title">
+              <div class="video-covers-heading"><div><span class="eyebrow">KAPAK KÜTÜPHANESİ</span><h3 id="video-covers-title">Reels kapakları</h3></div><small>JPEG · en fazla 8 MB · önerilen oran 9:16</small></div>
+              <form id="video-cover-form" class="video-cover-form"><label for="video-cover-files">Birden fazla kapak görseli seç</label><input id="video-cover-files" type="file" accept="image/jpeg,.jpg,.jpeg" multiple /><small class="video-upload-note">Kapaklar hesabına ait özel bulutta saklanır. Instagram görseli ortadan kırpabilir; 9:16 önerilir. Tek seferde en fazla 20 JPEG.</small><button type="submit" class="button button-primary" id="video-cover-submit">Kapakları buluta yükle</button><small id="video-cover-upload-status" role="status" aria-live="polite"></small></form>
+              <div id="video-cover-image-list" class="video-cover-image-list" aria-live="polite"></div>
+            </section>
             <section class="video-history-panel" aria-labelledby="video-history-title">
               <div class="video-history-heading"><div><span class="eyebrow">SON 50 İŞLEM</span><h3 id="video-history-title">İndirme durumu ve geçmiş</h3></div><button type="button" class="mini-button" data-action="refresh-uploaded-videos" aria-label="İndirme geçmişini yenile">Yenile</button></div>
               <div class="video-history-filters" role="tablist" aria-label="İndirme geçmişi filtresi"><button type="button" class="video-history-filter active" data-import-filter="all" aria-pressed="true">Tümü <span id="video-history-count-all">0</span></button><button type="button" class="video-history-filter" data-import-filter="active" aria-pressed="false">Sırada / indiriliyor <span id="video-history-count-active">0</span></button><button type="button" class="video-history-filter" data-import-filter="ready" aria-pressed="false">Tamamlandı <span id="video-history-count-ready">0</span></button><button type="button" class="video-history-filter" data-import-filter="failed" aria-pressed="false">Hata <span id="video-history-count-failed">0</span></button></div>
@@ -597,11 +608,91 @@ function saveVideoCardDraft(card) {
   state.uploadedVideoDrafts[videoId] = {
     accountId: card.querySelector('[data-video-account-select]')?.value || '',
     templateId: card.querySelector('[data-video-template-select]')?.value || '',
+    coverImageId: card.querySelector('[data-video-cover-select]')?.value || '',
     caption: card.querySelector('[data-video-caption]')?.value || '',
     tags: card.querySelector('[data-video-tags]')?.value || '',
     rightsConfirmed: card.querySelector('[data-video-rights]')?.checked === true,
   };
   persistVideoDrafts();
+}
+
+function formatStorageGigabytes(bytes) {
+  return (Math.max(0, Number(bytes) || 0) / (1024 ** 3)).toLocaleString('tr-TR', {
+    minimumFractionDigits: 2, maximumFractionDigits: 2,
+  });
+}
+
+function renderVideoStorageUsage() {
+  const remaining = document.querySelector('#video-storage-remaining');
+  const detail = document.querySelector('#video-storage-detail');
+  const updated = document.querySelector('#video-storage-updated');
+  const meter = document.querySelector('.video-storage-meter');
+  const fill = document.querySelector('#video-storage-meter-fill');
+  if (!remaining || !detail || !meter || !fill) return;
+  const usage = state.videoStorageUsage;
+  if (!usage) {
+    remaining.textContent = 'Depolama bilgisi alınamadı';
+    detail.textContent = 'Bağlantını kontrol edip yenile.';
+    fill.style.width = '0%';
+    meter.setAttribute('aria-valuenow', '0');
+    if (updated) updated.textContent = 'Kota ölçümü henüz tamamlanmadı.';
+    return;
+  }
+  const used = Math.max(0, Number(usage.usedBytes) || 0);
+  const quota = Math.max(1, Number(usage.quotaBytes) || 1024 ** 3);
+  const left = Math.max(0, Math.min(quota, Number(usage.remainingBytes) || 0));
+  const percent = Math.min(100, Math.max(0, used / quota * 100));
+  remaining.textContent = `Kalan ${formatStorageGigabytes(left)} GB`;
+  const activeImports = state.videoImports.filter((job) => ['queued', 'processing'].includes(job.status)).length;
+  detail.textContent = `${formatStorageGigabytes(used)} / ${formatStorageGigabytes(quota)} GB kullanılıyor · ${state.uploadedVideos.length} video arşivde${activeImports ? ` · ${activeImports} indirme sürüyor/sırada` : ''}`;
+  fill.style.width = `${percent.toFixed(2)}%`;
+  meter.setAttribute('aria-valuenow', String(Math.round(percent)));
+  meter.classList.toggle('is-near-limit', percent >= 85);
+  if (updated && usage.fetchedAt) {
+    updated.textContent = `Proje genelindeki kullanım · Son ölçüm ${new Intl.DateTimeFormat('tr-TR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(usage.fetchedAt))}`;
+  }
+}
+
+async function loadVideoStorageUsage(silent = true) {
+  const userId = state.session?.user?.id;
+  const generation = ++videoStorageLoadGeneration;
+  if (!userId) return;
+  try {
+    const { data, error } = await supabase.rpc('reelflow_storage_usage');
+    if (generation !== videoStorageLoadGeneration || state.session?.user?.id !== userId) return;
+    const row = Array.isArray(data) ? data[0] : data;
+    const usedBytes = Number(row?.used_bytes);
+    const quotaBytes = Number(row?.quota_bytes);
+    const remainingBytes = Number(row?.remaining_bytes);
+    state.videoStorageUsage = error || ![usedBytes, quotaBytes, remainingBytes].every(Number.isFinite)
+      ? null
+      : { usedBytes, quotaBytes, remainingBytes, fetchedAt: Date.now() };
+    renderVideoStorageUsage();
+    if (error && !silent) toast('Bulut depolama kullanımı alınamadı. Bağlantını kontrol edip yeniden dene.', 'warn');
+  } catch {
+    if (generation !== videoStorageLoadGeneration || state.session?.user?.id !== userId) return;
+    state.videoStorageUsage = null;
+    renderVideoStorageUsage();
+    if (!silent) toast('Bulut depolama kullanımı alınamadı. Bağlantını kontrol edip yeniden dene.', 'warn');
+  }
+}
+
+function renderVideoCoverLibrary() {
+  const holder = document.querySelector('#video-cover-image-list');
+  if (!holder) return;
+  if (state.videoCoverImagesError) {
+    holder.innerHTML = `<div class="video-covers-empty">${escapeHtml(state.videoCoverImagesError)}</div>`;
+    return;
+  }
+  if (!state.videoCoverImages.length) {
+    holder.innerHTML = '<div class="video-covers-empty">Henüz kapak eklenmedi. JPG görsellerini buraya yükle; ardından her video kartından istediğini seç.</div>';
+    return;
+  }
+  holder.innerHTML = state.videoCoverImages.map((cover) => `<article class="video-cover-item" data-cover-id="${escapeHtml(cover.id)}">
+    ${cover.signedUrl ? `<img src="${escapeHtml(cover.signedUrl)}" alt="${escapeHtml(cover.original_filename)}" loading="lazy" />` : '<div class="video-cover-placeholder">Önizleme yenile</div>'}
+    <div class="video-cover-item-meta"><strong title="${escapeHtml(cover.original_filename)}">${escapeHtml(cover.original_filename)}</strong><small>${formatVideoFileSize(cover.size_bytes)}${cover.created_at ? ` · ${escapeHtml(fmtDate(cover.created_at))}` : ''}</small></div>
+    <button type="button" class="mini-button mini-danger" data-action="delete-video-cover" data-id="${escapeHtml(cover.id)}">Sil</button>
+  </article>`).join('');
 }
 
 async function loadUploadedVideos(silent = false) {
@@ -612,7 +703,7 @@ async function loadUploadedVideos(silent = false) {
   state.uploadedVideosLoading = true;
   state.uploadedVideosError = '';
   renderUploadedVideos();
-  const [videoResult, importResult] = await Promise.all([
+  const [videoResult, importResult, coverResult] = await Promise.all([
     supabase.from('uploaded_videos')
       .select('id,user_id,original_filename,storage_path,mime_type,size_bytes,cleanup_pending,created_at,source_shortcode')
       .eq('user_id', userId).order('created_at', { ascending: false }).limit(100),
@@ -620,6 +711,9 @@ async function loadUploadedVideos(silent = false) {
       .select('id,shortcode,status,progress,stage,error_message,attempts,uploaded_video_id,created_at,updated_at,finished_at')
       .eq('user_id', userId)
       .order('created_at', { ascending: false }).limit(50),
+    supabase.from('video_cover_images')
+      .select('id,user_id,storage_path,original_filename,mime_type,size_bytes,cleanup_pending,created_at')
+      .eq('user_id', userId).eq('cleanup_pending', false).order('created_at', { ascending: false }).limit(50),
   ]);
   if (generation !== videoLibraryLoadGeneration || state.session?.user?.id !== userId) return;
   state.uploadedVideosLoading = false;
@@ -632,8 +726,26 @@ async function loadUploadedVideos(silent = false) {
     state.uploadedVideos = (Array.isArray(videoResult.data) ? videoResult.data : []).filter((video) => video.storage_path && !video.cleanup_pending);
     state.videoImports = Array.isArray(importResult.data) ? importResult.data : [];
   }
+  state.videoCoverImagesError = coverResult.error ? 'Kapak kütüphanesi yüklenemedi; yenilemeyi dene.' : '';
+  const covers = coverResult.error ? [] : (Array.isArray(coverResult.data) ? coverResult.data : []);
+  if (covers.length) {
+    try {
+      const { data: signedCovers } = await supabase.storage.from(VIDEO_COVER_BUCKET)
+        .createSignedUrls(covers.map((cover) => cover.storage_path), 86400);
+      if (generation !== videoLibraryLoadGeneration || state.session?.user?.id !== userId) return;
+      state.videoCoverImages = covers.map((cover, index) => ({
+        ...cover, signedUrl: signedCovers?.[index]?.signedUrl || '',
+      }));
+    } catch {
+      if (generation !== videoLibraryLoadGeneration || state.session?.user?.id !== userId) return;
+      state.videoCoverImages = covers.map((cover) => ({ ...cover, signedUrl: '' }));
+    }
+  } else {
+    state.videoCoverImages = [];
+  }
   renderUploadedVideos();
   renderQueue();
+  void loadVideoStorageUsage(true);
 }
 
 function renderVideoImportStatuses() {
@@ -714,12 +826,11 @@ function renderUploadedVideos() {
   const defaultAccountId = connected.some((account) => account.id === state.instagram?.id)
     ? state.instagram.id
     : connected[0]?.id || '';
-  const totalBytes = state.uploadedVideos.reduce((sum, video) => sum + Number(video.size_bytes || 0), 0);
   const activeImports = state.videoImports.filter((job) => ['queued', 'processing'].includes(job.status)).length;
-  const quota = document.querySelector('#video-library-quota');
   const count = document.querySelector('#video-library-count');
   const navCount = document.querySelector('#video-nav-count');
-  if (quota) quota.textContent = `Arşivinde ${state.uploadedVideos.length} video · ${formatVideoFileSize(totalBytes)}${activeImports ? ` · ${activeImports} indirme sürüyor/sırada` : ''} · Supabase Free kotası proje genelinde 1 GB, dosya başına 50 MB ve diğer depolama kullanımlarıyla ortaktır.`;
+  renderVideoStorageUsage();
+  renderVideoCoverLibrary();
   if (count) count.textContent = String(state.uploadedVideos.length + activeImports);
   if (navCount) navCount.textContent = String(state.uploadedVideos.length + activeImports);
   renderVideoImportStatuses();
@@ -747,6 +858,14 @@ function renderUploadedVideos() {
     const staleTemplate = selectedTemplateId && !templateExists
       ? `<option value="${escapeHtml(selectedTemplateId)}" selected disabled>Seçili şablon bulunamadı</option>` : '';
     const templateOptions = state.captionTemplates.map((template) => `<option value="${escapeHtml(template.id)}"${template.id === selectedTemplateId ? ' selected' : ''}>${escapeHtml(template.name)}</option>`).join('');
+    const selectedCoverId = draft.coverImageId || '';
+    const selectedCover = state.videoCoverImages.find((cover) => cover.id === selectedCoverId);
+    const staleCoverOption = selectedCoverId && !selectedCover
+      ? `<option value="${escapeHtml(selectedCoverId)}" selected disabled>Seçili kapak bulunamadı</option>` : '';
+    const coverOptions = state.videoCoverImages.map((cover) => `<option value="${escapeHtml(cover.id)}"${cover.id === selectedCoverId ? ' selected' : ''}>${escapeHtml(cover.original_filename)}</option>`).join('');
+    const coverPreview = selectedCover?.signedUrl
+      ? `<img src="${escapeHtml(selectedCover.signedUrl)}" alt="${escapeHtml(selectedCover.original_filename)}" loading="lazy" />`
+      : selectedCover ? '<small>Kapak önizlemesi yenilemede tekrar yüklenir.</small>' : '<small>Seçilmezse Instagram videonun karesini kullanır.</small>';
     const date = video.created_at ? fmtDate(video.created_at) : '';
     const fileAvailable = Boolean(video.storage_path) && !video.cleanup_pending;
     const controlsDisabled = !fileAvailable || connected.length === 0 ? ' disabled' : '';
@@ -756,6 +875,7 @@ function renderUploadedVideos() {
       <div class="video-card-fields">
         <label class="video-card-field"><span>Yayın hesabı</span><select data-video-account-select data-video-id="${escapeHtml(video.id)}" aria-label="${escapeHtml(video.original_filename)} yayın hesabı"${controlsDisabled}>${staleAccount}${connected.length ? accountOptions : '<option value="">Önce Instagram hesabı bağla</option>'}</select></label>
         <label class="video-card-field"><span>Açıklama şablonu</span><select data-video-template-select data-video-id="${escapeHtml(video.id)}" aria-label="${escapeHtml(video.original_filename)} açıklama şablonu"${state.captionTemplatesLoading ? ' disabled' : ''}>${staleTemplate}<option value=""${selectedTemplateId ? '' : ' selected'}>Şablon seç…</option>${templateOptions}</select></label>
+        <label class="video-card-field video-card-cover-field"><span>Reels kapağı</span><select data-video-cover-select data-video-id="${escapeHtml(video.id)}" aria-label="${escapeHtml(video.original_filename)} Reels kapağı"${fileAvailable ? '' : ' disabled'}>${staleCoverOption}<option value=""${selectedCoverId ? '' : ' selected'}>Videonun karesini kullan</option>${coverOptions}</select><span class="video-cover-selected-preview" data-video-cover-preview>${coverPreview}</span></label>
         <label class="video-card-field video-card-caption"><span>Paylaşım açıklaması</span><textarea data-video-caption data-video-id="${escapeHtml(video.id)}" maxlength="2200" rows="2" placeholder="Bu video için açıklama…">${escapeHtml(draft.caption || '')}</textarea></label>
         <label class="video-card-field video-card-caption"><span>Hashtag / @mention bloğu</span><textarea data-video-tags data-video-id="${escapeHtml(video.id)}" maxlength="2200" rows="2" placeholder="#reels @marka">${escapeHtml(draft.tags || '')}</textarea></label>
       </div>
@@ -946,6 +1066,111 @@ function closeVideoPreview() {
   modal?.remove();
 }
 
+async function uploadVideoCovers(form) {
+  if (state.videoCoverUploadBusy) return;
+  const userId = state.session?.user?.id;
+  const userGeneration = authUserGeneration;
+  const input = form.querySelector('#video-cover-files');
+  const files = Array.from(input?.files || []);
+  const status = form.querySelector('#video-cover-upload-status');
+  const button = form.querySelector('#video-cover-submit');
+  if (!userId) return toast('Önce ReelFlow hesabına giriş yap.', 'warn');
+  if (!files.length) return toast('Yüklemek için JPEG kapak görselleri seç.', 'warn');
+  if (files.length > MAX_COVER_IMAGES_PER_BATCH) {
+    return toast(`Tek seferde en fazla ${MAX_COVER_IMAGES_PER_BATCH} kapak görseli seçebilirsin.`, 'warn');
+  }
+  const invalid = files.map((file) => validateCoverImageFile(file)).find(Boolean);
+  if (invalid) return toast(invalid, 'warn');
+
+  state.videoCoverUploadBusy = true;
+  form.querySelectorAll('button, input').forEach((control) => { control.disabled = true; });
+  if (status) status.textContent = `0 / ${files.length} kapak yükleniyor…`;
+  let completed = 0;
+  try {
+    const results = await mapWithConcurrency(files, 3, async (file) => {
+      if (authUserGeneration !== userGeneration || state.session?.user?.id !== userId) return 'stale';
+      let coverId;
+      try { coverId = createCoverImageId(); } catch { return 'failed'; }
+      const storagePath = coverImageStoragePath(userId, coverId);
+      try {
+        const { error: uploadError } = await supabase.storage.from(VIDEO_COVER_BUCKET).upload(storagePath, file, {
+          cacheControl: '3600', contentType: 'image/jpeg', upsert: false,
+        });
+        if (uploadError) return 'failed';
+        if (authUserGeneration !== userGeneration || state.session?.user?.id !== userId) {
+          await supabase.storage.from(VIDEO_COVER_BUCKET).remove([storagePath]);
+          return 'stale';
+        }
+        const { error: metadataError } = await supabase.from('video_cover_images').insert({
+          id: coverId, user_id: userId, storage_path: storagePath,
+          original_filename: Array.from(String(file.name || 'reels-cover.jpg')).slice(0, 255).join(''),
+          mime_type: 'image/jpeg', size_bytes: Number(file.size),
+        });
+        if (metadataError) {
+          await supabase.storage.from(VIDEO_COVER_BUCKET).remove([storagePath]);
+          return 'failed';
+        }
+        return 'uploaded';
+      } catch {
+        return 'failed';
+      } finally {
+        completed += 1;
+        if (status && authUserGeneration === userGeneration && state.session?.user?.id === userId) {
+          status.textContent = `${completed} / ${files.length} kapak işlendi…`;
+        }
+      }
+    });
+    if (authUserGeneration !== userGeneration || state.session?.user?.id !== userId) return;
+    const uploaded = results.filter((result) => result === 'uploaded').length;
+    const failed = results.filter((result) => result === 'failed').length;
+    if (status) status.textContent = `${uploaded} kapak buluta kaydedildi${failed ? ` · ${failed} yüklenemedi` : ''}.`;
+    if (input) input.value = '';
+    toast(failed ? `${uploaded} kapak yüklendi; ${failed} dosya başarısız oldu.` : `${uploaded} kapak özel buluta kaydedildi.`, failed ? 'warn' : 'success');
+    await loadUploadedVideos(true);
+  } finally {
+    if (authUserGeneration === userGeneration && state.session?.user?.id === userId) {
+      state.videoCoverUploadBusy = false;
+      form.querySelectorAll('button, input').forEach((control) => { control.disabled = false; });
+      if (button) button.textContent = 'Kapakları buluta yükle';
+    }
+  }
+}
+
+async function deleteVideoCover(coverId) {
+  const cover = state.videoCoverImages.find((item) => item.id === coverId);
+  if (!cover) return;
+  if (!window.confirm(`“${cover.original_filename}” kapak görseli kalıcı olarak silinsin mi?`)) return;
+  const { data, error } = await supabase.rpc('claim_video_cover_cleanup', { p_cover_image_id: coverId });
+  if (error) {
+    toast(error.message?.includes('cover_in_use')
+      ? 'Bu kapak sıradaki veya yayınlanmakta olan bir videoda kullanılıyor.'
+      : 'Kapak silme işlemi başlatılamadı; tekrar dene.', 'warn');
+    return;
+  }
+  const storagePath = Array.isArray(data) ? data[0]?.storage_path : data?.storage_path;
+  if (!storagePath) return toast('Kapak zaten silinmiş veya işlem sürüyor.', 'info');
+  const { error: removeError } = await supabase.storage.from(VIDEO_COVER_BUCKET).remove([storagePath]);
+  if (removeError) {
+    await supabase.rpc('release_video_cover_cleanup', { p_cover_image_id: coverId });
+    toast('Kapak depolamadan silinemedi; işlem geri alındı. Yeniden dene.', 'error');
+    return;
+  }
+  const { data: finished, error: finishError } = await supabase.rpc('finish_video_cover_cleanup', { p_cover_image_id: coverId });
+  if (finishError || !finished) toast('Görsel silindi; arşiv kaydı yenilemede tamamlanacak.', 'warn');
+  else toast('Kapak bulut arşivinden silindi.', 'success');
+  await loadUploadedVideos(true);
+}
+
+function renderSelectedCoverPreview(card) {
+  const holder = card?.querySelector('[data-video-cover-preview]');
+  const coverId = card?.querySelector('[data-video-cover-select]')?.value || '';
+  if (!holder) return;
+  const cover = state.videoCoverImages.find((item) => item.id === coverId);
+  holder.innerHTML = cover?.signedUrl
+    ? `<img src="${escapeHtml(cover.signedUrl)}" alt="${escapeHtml(cover.original_filename)}" loading="lazy" />`
+    : cover ? '<small>Kapak önizlemesi yenilemede tekrar yüklenir.</small>' : '<small>Seçilmezse Instagram videonun karesini kullanır.</small>';
+}
+
 async function queueUploadedVideo(videoId) {
   const card = [...document.querySelectorAll('[data-video-card]')].find((item) => item.dataset.videoId === videoId);
   const video = state.uploadedVideos.find((item) => item.id === videoId && item.storage_path && !item.cleanup_pending);
@@ -977,11 +1202,12 @@ async function queueUploadedVideo(videoId) {
   }
   saveVideoCardDraft(card);
   if (button) { button.disabled = true; button.textContent = 'Kuyruğa ekleniyor…'; }
-  const { data, error } = await supabase.rpc('enqueue_uploaded_video', {
+  const { data, error } = await supabase.rpc('enqueue_uploaded_video_with_cover', {
     p_uploaded_video_id: videoId,
     p_instagram_account_id: accountId,
     p_caption: caption,
     p_rights_confirmed: true,
+    p_cover_image_id: card.querySelector('[data-video-cover-select]')?.value || null,
   });
   if (button) { button.disabled = false; button.textContent = 'Kuyruğa ekle'; }
   if (error) {
@@ -1436,6 +1662,16 @@ async function handleClick(event) {
     await retryVideoImport(button.dataset.id);
     return;
   }
+  if (button.dataset.action === 'refresh-storage-usage') {
+    button.disabled = true;
+    await loadVideoStorageUsage(false);
+    button.disabled = false;
+    return;
+  }
+  if (button.dataset.action === 'delete-video-cover') {
+    await deleteVideoCover(button.dataset.id);
+    return;
+  }
   if (button.dataset.action === 'paste-video-import-urls') {
     try {
       appendVideoImportText(await navigator.clipboard.readText());
@@ -1590,6 +1826,11 @@ async function handleClick(event) {
 
 root.addEventListener('click', handleClick);
 root.addEventListener('submit', async (event) => {
+  if (event.target.id === 'video-cover-form') {
+    event.preventDefault();
+    await uploadVideoCovers(event.target);
+    return;
+  }
   if (event.target.id === 'video-import-form') {
     event.preventDefault();
     await enqueueVideoImports(event.target);
@@ -1649,6 +1890,12 @@ root.addEventListener('change', async (event) => {
   }
   if (event.target.matches('[data-video-account-select]')) {
     saveVideoCardDraft(event.target.closest('[data-video-card]'));
+    return;
+  }
+  if (event.target.matches('[data-video-cover-select]')) {
+    const card = event.target.closest('[data-video-card]');
+    saveVideoCardDraft(card);
+    renderSelectedCoverPreview(card);
     return;
   }
   if (event.target.matches('[data-video-template-select]')) {
@@ -1744,12 +1991,17 @@ supabase.auth.onAuthStateChange((event, session) => {
       state.rows = [];
       state.uploadedVideos = [];
       state.videoImports = [];
+      state.videoCoverImages = [];
+      state.videoCoverImagesError = '';
+      state.videoCoverUploadBusy = false;
+      state.videoStorageUsage = null;
       state.videoImportBusy = false;
       state.uploadedVideoDrafts = {};
       state.uploadedVideoDraftsUserId = '';
       state.uploadedVideosLoading = false;
       state.uploadedVideosError = '';
       videoLibraryLoadGeneration++;
+      videoStorageLoadGeneration++;
       state.instagram = null;
       state.instagramAccounts = [];
       state.reelAccountTargets = {};
@@ -1781,12 +2033,17 @@ supabase.auth.onAuthStateChange((event, session) => {
     state.rows = [];
     state.uploadedVideos = [];
     state.videoImports = [];
+    state.videoCoverImages = [];
+    state.videoCoverImagesError = '';
+    state.videoCoverUploadBusy = false;
+    state.videoStorageUsage = null;
     state.videoImportBusy = false;
     state.uploadedVideoDrafts = {};
     state.uploadedVideoDraftsUserId = '';
     state.uploadedVideosLoading = false;
     state.uploadedVideosError = '';
     videoLibraryLoadGeneration++;
+    videoStorageLoadGeneration++;
     state.instagram = null;
     state.instagramAccounts = [];
     state.reelAccountTargets = {};
@@ -1832,7 +2089,10 @@ window.addEventListener('beforeinstallprompt', (event) => {
 window.addEventListener('online', () => document.querySelector('.connection-pill')?.classList.remove('is-offline'));
 window.addEventListener('offline', () => document.querySelector('.connection-pill')?.classList.add('is-offline'));
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && state.session) loadInstagramAccount();
+  if (!document.hidden && state.session) {
+    loadInstagramAccount();
+    loadUploadedVideos(true);
+  }
 });
 setInterval(() => {
   if (!state.session || document.hidden) return;
@@ -1841,8 +2101,13 @@ setInterval(() => {
       videoImportRefreshTicks = 0;
       loadUploadedVideos(true);
     }
+    videoStorageRefreshTicks = 0;
   } else {
     videoImportRefreshTicks = 0;
+    if (++videoStorageRefreshTicks >= 12) {
+      videoStorageRefreshTicks = 0;
+      loadVideoStorageUsage(true);
+    }
   }
   if (state.rows.some((row) => row.status === 'processing')) {
     idleQueueRefreshTicks = 0;

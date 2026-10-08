@@ -171,6 +171,31 @@ def test_instagram_login_container_uses_graph_instagram_and_video_url() -> None:
     assert call["kwargs"]["data"]["video_url"].startswith("https://")
 
 
+def test_instagram_login_container_passes_selected_reel_cover_url() -> None:
+    session = FakeSession([FakeResponse({"id": "c1"})])
+    publisher = make_instagram_login_publisher(session)
+    cover_url = "https://fwscsiswefezkyfblres.supabase.co/storage/v1/object/sign/reelflow-cover-images/user/cover.jpg?token=private"
+
+    publisher.create_reel_container("açıklama", "https://files.example/reel.mp4", cover_url)
+
+    assert session.calls[0]["kwargs"]["data"]["cover_url"] == cover_url
+
+
+def test_private_cover_url_is_redacted_from_meta_error(tmp_path: Path) -> None:
+    video = tmp_path / "reel.mp4"
+    video.write_bytes(b"video")
+    cover_url = "https://project.supabase.co/storage/v1/object/sign/reelflow-cover-images/user/cover.jpg?token=secret-cover"
+    session = FakeSession([FakeResponse({"error": {"message": cover_url}}, status_code=400)])
+    publisher = make_instagram_login_publisher(session)
+    publisher._cloudinary.upload_video = lambda path, callback: "https://files.example/reel.mp4"
+
+    with pytest.raises(InstagramApiError) as excinfo:
+        publisher.publish_reel(video, "caption", cover_url=cover_url)
+
+    assert cover_url not in str(excinfo.value)
+    assert "[SIGNED_COVER_URL]" in str(excinfo.value)
+
+
 def test_instagram_login_requires_public_url() -> None:
     session = FakeSession([])
     with pytest.raises(InstagramApiError, match="herkese açık"):

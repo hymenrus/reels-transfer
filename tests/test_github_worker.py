@@ -45,6 +45,7 @@ def test_queued_query_includes_user_id_and_queued_filter() -> None:
     params = parse_qs(urlparse(session.calls[0][1]).query)
     assert "user_id" in params["select"][0]
     assert "instagram_account_id" in params["select"][0]
+    assert "cover_image_id" in params["select"][0]
     assert "publish_now" in params["select"][0]
     assert params["status"] == ["eq.queued"]
     assert params["order"] == ["publish_now.desc,created_at.asc"]
