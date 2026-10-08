@@ -33,7 +33,28 @@ test('successful queue add clears URLs but retains and persists the caption draf
   assert.match(successBranch, /saveReelDraft\(\)/);
   assert.doesNotMatch(successBranch, /(?:captionInput|caption-input)\.value\s*=\s*''/);
   assert.match(source, /setCaptionForAccount\(/);
+  assert.match(source, /setTagsForAccount\(/);
+  assert.match(source, /composeCaptionWithTags\(/);
   assert.match(source, /instagram_caption_templates/);
+  assert.match(addToQueue, /p_caption:\s*composeCaptionWithTags\(sharedCaption \|\| item\.caption, automaticTags\)/);
+  assert.match(addToQueue, /length > 2200/);
+});
+
+test('saved templates are shared per ReelFlow user rather than scoped to the selected Instagram account', () => {
+  const loadStart = source.indexOf('async function loadCaptionTemplates()');
+  const loadEnd = source.indexOf('function renderCaptionTemplates()', loadStart);
+  const saveStart = source.indexOf('async function saveCaptionTemplate()');
+  const saveEnd = source.indexOf('async function deleteCaptionTemplate()', saveStart);
+  const deleteStart = saveEnd;
+  const deleteEnd = source.indexOf('function renderInstagramAccount()', deleteStart);
+  const load = source.slice(loadStart, loadEnd);
+  const save = source.slice(saveStart, saveEnd);
+  const remove = source.slice(deleteStart, deleteEnd);
+
+  assert.match(load, /\.eq\('user_id', userId\)/);
+  assert.doesNotMatch(load, /instagram_account_id/);
+  assert.doesNotMatch(save, /instagram_account_id/);
+  assert.doesNotMatch(remove, /instagram_account_id/);
 });
 
 test('new queue submissions pin every Reel to the captured selected Instagram account', () => {

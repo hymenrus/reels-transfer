@@ -45,13 +45,14 @@
 .mini-assign{border-color:rgba(243,199,121,.3);color:var(--amber);white-space:nowrap}
 @media(max-width:560px){.ig-account-select-row{align-items:stretch;flex-direction:column;gap:8px}.ig-account-choices{flex-wrap:nowrap;overflow-x:auto;padding:2px 2px 6px;scrollbar-width:thin}.ig-account-choice{flex:none;min-height:44px;padding-inline:14px}.ig-account-actions{display:grid;grid-template-columns:1fr}.ig-add-account{width:100%;min-height:44px}.instagram-account-top .mini-button{min-height:42px}.reel-target-account{white-space:normal}.mini-assign{min-height:40px}}
 
-/* Per-account caption templates: readable controls and touch-sized actions across desktop and mobile. */
+/* Per-user shared caption templates: readable controls and touch-sized actions across desktop and mobile. */
 .caption-template-panel{display:grid;gap:10px;margin:7px 0 17px;padding:13px;border:1px solid var(--line);border-radius:13px;background:var(--surface-2)}
 .caption-template-heading{display:grid;gap:4px}.caption-template-heading strong{font-size:10px}.caption-template-heading small,.caption-template-note{color:var(--muted);font-size:8px;line-height:1.5}
 .caption-template-select-row,.caption-template-save-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center}
-.caption-template-panel select,.caption-template-panel input{box-sizing:border-box;width:100%;min-width:0;min-height:44px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--text);font:inherit;font-size:11px;outline:none}
-.caption-template-panel select:focus,.caption-template-panel input:focus{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 15%,transparent)}
-.caption-template-panel select:disabled,.caption-template-panel input:disabled,.caption-template-panel button:disabled{opacity:.55;cursor:not-allowed}
+.caption-template-panel select,.caption-template-panel input,.caption-template-panel textarea{box-sizing:border-box;width:100%;min-width:0;min-height:44px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--text);font:inherit;font-size:11px;outline:none}
+.caption-template-panel textarea{min-height:66px;resize:vertical;line-height:1.5}
+.caption-template-panel select:focus,.caption-template-panel input:focus,.caption-template-panel textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 15%,transparent)}
+.caption-template-panel select:disabled,.caption-template-panel input:disabled,.caption-template-panel textarea:disabled,.caption-template-panel button:disabled{opacity:.55;cursor:not-allowed}
 .caption-template-panel button{min-height:44px;white-space:nowrap}.caption-template-delete{padding:0 13px;border:1px solid var(--line);border-radius:10px;background:transparent;color:var(--muted);font:inherit;font-size:10px;cursor:pointer}.caption-template-save{padding:0 15px;font-size:10px}
 .caption-template-status[data-state=error]{color:var(--red)}
-@media(max-width:560px){.caption-template-panel{gap:9px;padding:12px}.caption-template-select-row,.caption-template-save-row{grid-template-columns:minmax(0,1fr)}.caption-template-panel button{width:100%;justify-content:center}.caption-template-panel select,.caption-template-panel input{font-size:16px}.caption-template-heading strong{font-size:12px}.caption-template-heading small,.caption-template-note{font-size:10px}}
+@media(max-width:560px){.caption-template-panel{gap:9px;padding:12px}.caption-template-select-row,.caption-template-save-row{grid-template-columns:minmax(0,1fr)}.caption-template-panel button{width:100%;justify-content:center}.caption-template-panel select,.caption-template-panel input,.caption-template-panel textarea{font-size:16px}.caption-template-heading strong{font-size:12px}.caption-template-heading small,.caption-template-note{font-size:10px}}

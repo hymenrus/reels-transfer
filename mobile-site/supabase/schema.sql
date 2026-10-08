@@ -537,4 +537,32 @@ COMMENT ON COLUMN public.reels_queue.instagram_account_id IS
 COMMENT ON TABLE public.instagram_credentials IS
   'Private Instagram OAuth credentials keyed by internal account UUID; service role only. Never expose to browser clients.';
 
+-- User-owned caption templates are shared across all Instagram accounts on the same ReelFlow login.
+CREATE TABLE IF NOT EXISTS public.instagram_caption_templates (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  instagram_account_id uuid,
+  name text NOT NULL CHECK (char_length(btrim(name)) BETWEEN 1 AND 60),
+  caption text NOT NULL CHECK (char_length(btrim(caption)) <= 2200),
+  tags text NOT NULL DEFAULT '' CHECK (char_length(btrim(tags)) <= 2200),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS instagram_caption_templates_owner_name_key
+  ON public.instagram_caption_templates (user_id, lower(name));
+CREATE INDEX IF NOT EXISTS instagram_caption_templates_owner_updated_idx
+  ON public.instagram_caption_templates (user_id, updated_at DESC);
+ALTER TABLE public.instagram_caption_templates ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.instagram_caption_templates FROM PUBLIC, anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.instagram_caption_templates TO authenticated;
+DROP POLICY IF EXISTS "Users manage their own Instagram caption templates" ON public.instagram_caption_templates;
+CREATE POLICY "Users manage their own Instagram caption templates"
+  ON public.instagram_caption_templates FOR ALL TO authenticated
+  USING ((SELECT auth.uid()) = user_id)
+  WITH CHECK ((SELECT auth.uid()) = user_id);
+COMMENT ON TABLE public.instagram_caption_templates IS
+  'Caption templates and hashtag/mention blocks are private to one ReelFlow user and shared across that user’s Instagram accounts.';
+COMMENT ON COLUMN public.instagram_caption_templates.instagram_account_id IS
+  'Deprecated compatibility column; NULL denotes the shared per-user template scope.';
+
 NOTIFY pgrst, 'reload schema';
