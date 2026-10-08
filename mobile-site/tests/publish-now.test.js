@@ -98,7 +98,8 @@ test('per-URL cover selector stays visible on mobile before an Instagram account
   assert.ok(start >= 0 && end > start);
   assert.match(renderer, /const noAccountOption = connectedAccounts\.length \? ''/);
   assert.match(renderer, /data-reel-cover-select data-shortcode-key=/);
-  assert.match(renderer, /if \(!items\.length\) \{\s*panel\.hidden = false;[\s\S]*URL başına kapak seçimi/);
+  assert.match(renderer, /if \(!items\.length\) \{\s*panel\.hidden = true;\s*panel\.innerHTML = '';/);
+  assert.doesNotMatch(renderer, /URL başına kapak seçimi/);
   assert.match(renderer, /kapak ve açıklama seçimini şimdi yapabilirsin/);
   assert.doesNotMatch(renderer, /if \(!connectedAccounts\.length\)[\s\S]*?return;/);
   assert.match(source, /URL’leri ekleyince her bağlantı için hesap, açıklama ve kapak seçimi görünür/);
