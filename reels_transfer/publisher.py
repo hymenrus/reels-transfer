@@ -44,6 +44,7 @@ class InstagramPublisher:
         cloudinary_upload_preset: str = "",
     ) -> None:
         self._token = access_token
+        self._private_video_url: str | None = None
         self._ig_user_id = ig_user_id
         self._graph_version = graph_version
         self._api_mode = api_mode
@@ -71,7 +72,10 @@ class InstagramPublisher:
         if not response.ok or "error" in payload:
             detail = payload.get("error") or payload.get("debug_info") or payload
             # Tokenı olası hata gövdesinden de temizle.
-            text = str(detail).replace(self._token, "[TOKEN]")
+            text = str(detail)
+            if self._private_video_url:
+                text = text.replace(self._private_video_url, "[SIGNED_VIDEO_URL]")
+            text = text.replace(self._token, "[TOKEN]")
             raise InstagramApiError(f"HTTP {response.status_code}: {text}")
         return payload
 
@@ -321,19 +325,36 @@ class InstagramPublisher:
         video_path: Path,
         caption: str,
         progress_callback: Callable[[int, str], None] | None = None,
+        public_video_url: str | None = None,
     ) -> str:
-        public_url = self.upload_public_video(video_path, progress_callback) if self._api_mode == "instagram_login" else None
+        public_url = None
+        if self._api_mode == "instagram_login":
+            if public_video_url:
+                parsed = urlsplit(public_video_url)
+                if (parsed.scheme != "https" or not parsed.hostname or parsed.username
+                        or parsed.password or parsed.fragment):
+                    raise InstagramApiError("Instagram için verilen süreli video bağlantısı güvenli değil.")
+                public_url = public_video_url
+                if progress_callback:
+                    progress_callback(82, "Özel arşiv bağlantısı Meta'ya iletiliyor")
+            else:
+                public_url = self.upload_public_video(video_path, progress_callback)
         if progress_callback:
             progress_callback(84, "Instagram Reels bilgileri hazırlanıyor")
-        container_id, upload_uri = self.create_reel_container(caption, public_url)
-        self.upload_video(upload_uri, video_path)
-        self.wait_until_ready(container_id, progress_callback)
-        if progress_callback:
-            progress_callback(98, "Instagram hesabında yayınlanıyor")
-        media_id = self.publish_container(container_id)
-        if progress_callback:
-            progress_callback(99, "Yayın yanıtı alındı · kayıt güncelleniyor")
-        return media_id
+        if public_video_url:
+            self._private_video_url = public_video_url
+        try:
+            container_id, upload_uri = self.create_reel_container(caption, public_url)
+            self.upload_video(upload_uri, video_path)
+            self.wait_until_ready(container_id, progress_callback)
+            if progress_callback:
+                progress_callback(98, "Instagram hesabında yayınlanıyor")
+            media_id = self.publish_container(container_id)
+            if progress_callback:
+                progress_callback(99, "Yayın yanıtı alındı · kayıt güncelleniyor")
+            return media_id
+        finally:
+            self._private_video_url = None
 
 
 def refresh_long_lived_token(

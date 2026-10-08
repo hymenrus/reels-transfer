@@ -3,17 +3,18 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
-from uuid import UUID
+from urllib.parse import quote, urlencode, urlsplit
+from uuid import UUID, uuid4
 
 import requests
 
 from .config import ConfigError, Settings, load_settings
 from .downloader import DownloadError, download_reel
-from .media import MediaError, ensure_tools_available, prepare_for_reels
+from .media import MediaError, ensure_tools_available, original_reel_is_meta_compatible, prepare_for_reels
 from .publisher import InstagramApiError, InstagramPublisher, refresh_long_lived_token
 
 LOGGER = logging.getLogger("reels_transfer.github_worker")
@@ -37,13 +38,24 @@ def _parse_time(value: Any) -> datetime:
 
 
 class SupabaseQueue:
-    def __init__(self, project_url: str, service_key: str, session: requests.Session | None = None) -> None:
-        base = project_url.rstrip("/") + "/rest/v1"
+    def __init__(
+        self,
+        project_url: str,
+        service_key: str,
+        session: requests.Session | None = None,
+        storage_session: requests.Session | None = None,
+    ) -> None:
+        self.project_url = project_url.rstrip("/")
+        base = self.project_url + "/rest/v1"
         self.queue_url = base + "/reels_queue"
         self.accounts_url = base + "/instagram_accounts"
         self.credentials_url = base + "/instagram_credentials"
         self.rpc_url = base + "/rpc"
+        self.storage_url = self.project_url + "/storage/v1"
+        self.temporary_video_objects_url = base + "/worker_temporary_video_objects"
         self.session = session or requests.Session()
+        # Never send the service-role key to the signed-URL download request.
+        self.storage_session = storage_session or requests.Session()
         self.session.headers.update({
             "apikey": service_key,
             "Authorization": f"Bearer {service_key}",
@@ -59,7 +71,7 @@ class SupabaseQueue:
 
     def queued(self, limit: int, target_job_id: str | None = None) -> list[dict[str, Any]]:
         filters = {
-            "select": "id,user_id,instagram_account_id,shortcode,source_url,caption,status,progress,attempts,rights_confirmed,publish_now,created_at",
+            "select": "id,user_id,instagram_account_id,uploaded_video_id,shortcode,source_url,caption,status,progress,attempts,rights_confirmed,publish_now,created_at",
             "status": "eq.queued",
             "order": "publish_now.desc,created_at.asc",
             "limit": str(max(1, min(limit, 200))),
@@ -70,6 +82,259 @@ class SupabaseQueue:
         params = urlencode(filters)
         response = self.session.get(self.queue_url + "?" + params, timeout=30)
         return self._rows(response, "kuyruk")
+
+    def signed_uploaded_video(self, job: dict[str, Any], expires_seconds: int = 14400) -> dict[str, Any]:
+        user_id = str(job.get("user_id") or "")
+        video_id = str(job.get("uploaded_video_id") or "")
+        if not user_id or not video_id:
+            raise QueueApiError("Yüklenen video için sahip veya video kimliği bulunamadı.")
+        params = urlencode({
+            "select": "id,user_id,storage_path,mime_type,size_bytes,cleanup_pending",
+            "id": f"eq.{video_id}",
+            "user_id": f"eq.{user_id}",
+            "limit": "1",
+        })
+        try:
+            response = self.session.get("https://" + urlsplit(self.project_url).netloc + "/rest/v1/uploaded_videos?" + params, timeout=30)
+        except requests.RequestException as exc:
+            raise QueueApiError("Özel video bilgisi alınamadı (ağ hatası).") from exc
+        rows = self._rows(response, "özel video bilgisi")
+        if not rows:
+            raise QueueApiError("Özel video arşivinde kaynak dosya bulunamadı.")
+        video = rows[0]
+        path = str(video.get("storage_path") or "")
+        mime_type = str(video.get("mime_type") or "")
+        try:
+            size_bytes = int(video.get("size_bytes") or 0)
+        except (TypeError, ValueError) as exc:
+            raise QueueApiError("Özel video boyutu geçersiz.") from exc
+        if (video.get("cleanup_pending") or not path.startswith(user_id + "/")
+                or not re.fullmatch(r"[0-9a-fA-F-]{36}/[A-Za-z0-9_-]+\.(?:mp4|mov|m4v)", path)
+                or mime_type not in {"video/mp4", "video/quicktime", "video/x-m4v"}
+                or size_bytes < 1 or size_bytes > 50 * 1024 * 1024):
+            raise QueueApiError("Özel video kaynağı güvenli veya geçerli değil.")
+        object_url = f"{self.storage_url}/object/sign/reelflow-original-videos/{quote(path, safe='/')}"
+        try:
+            signed_response = self.session.post(object_url, json={"expiresIn": max(600, min(int(expires_seconds), 604800))}, timeout=30)
+        except requests.RequestException as exc:
+            raise QueueApiError("Özel video bağlantısı üretilemedi (ağ hatası).") from exc
+        if not signed_response.ok:
+            raise QueueApiError(f"Özel video bağlantısı üretilemedi: HTTP {signed_response.status_code}")
+        try:
+            payload = signed_response.json()
+        except ValueError as exc:
+            raise QueueApiError("Özel video bağlantısı yanıtı geçersiz.") from exc
+        signed = str(payload.get("signedURL") or payload.get("signedUrl") or "") if isinstance(payload, dict) else ""
+        if signed.startswith("https://"):
+            signed_url = signed
+        elif signed.startswith("/storage/v1/"):
+            signed_url = self.project_url + signed
+        elif signed.startswith("/object/"):
+            signed_url = self.storage_url + signed
+        elif signed.startswith("object/"):
+            signed_url = self.storage_url + "/" + signed
+        else:
+            raise QueueApiError("Özel video bağlantısı HTTPS adresi değil.")
+        parsed = urlsplit(signed_url)
+        expected_path = f"/storage/v1/object/sign/reelflow-original-videos/{quote(path, safe='/')}"
+        if (parsed.scheme != "https" or parsed.netloc != urlsplit(self.project_url).netloc
+                or parsed.path != expected_path or "token=" not in parsed.query):
+            raise QueueApiError("Özel video bağlantısının kapsamı doğrulanamadı.")
+        return {"url": signed_url, "storage_path": path, "mime_type": mime_type, "size_bytes": size_bytes}
+
+    def download_uploaded_video(self, job: dict[str, Any], destination: Path) -> tuple[Path, str]:
+        signed = self.signed_uploaded_video(job)
+        suffix = {"video/mp4": ".mp4", "video/quicktime": ".mov", "video/x-m4v": ".m4v"}[signed["mime_type"]]
+        destination.mkdir(parents=True, exist_ok=True)
+        target = destination / f"reelflow-original-{uuid4().hex}{suffix}"
+        response = None
+        total = 0
+        try:
+            response = self.storage_session.get(signed["url"], stream=True, timeout=(15, 900))
+            if not response.ok:
+                raise QueueApiError(f"Özel video geçici indirmesi başarısız: HTTP {response.status_code}")
+            with target.open("wb") as handle:
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    if not chunk:
+                        continue
+                    total += len(chunk)
+                    if total > signed["size_bytes"] or total > 50 * 1024 * 1024:
+                        raise QueueApiError("Özel video indirmesi beklenen boyut sınırını aştı.")
+                    handle.write(chunk)
+            if total != signed["size_bytes"]:
+                raise QueueApiError("Özel video indirmesi eksik veya bozuk.")
+            return target, signed["url"]
+        except QueueApiError:
+            target.unlink(missing_ok=True)
+            raise
+        except (OSError, requests.RequestException) as exc:
+            target.unlink(missing_ok=True)
+            raise QueueApiError(f"Özel video geçici indirmesi başarısız: {type(exc).__name__}") from exc
+        finally:
+            if response is not None:
+                response.close()
+
+    def claim_uploaded_video_cleanups(self, limit: int = 50) -> list[dict[str, Any]]:
+        try:
+            response = self.session.post(
+                self.rpc_url + "/claim_uploaded_video_cleanups",
+                json={"p_limit": max(1, min(limit, 200))}, timeout=30,
+            )
+        except requests.RequestException as exc:
+            raise QueueApiError("Yayın sonrası video temizleme kuyruğuna erişilemedi.") from exc
+        return self._rows(response, "yayın sonrası video temizleme kuyruğu")
+
+    def delete_uploaded_video_object(self, storage_path: str) -> None:
+        if not re.fullmatch(r"[0-9a-fA-F-]{36}/[A-Za-z0-9_-]+\.(?:mp4|mov|m4v)", storage_path):
+            raise QueueApiError("Video silme yolu güvenli değil.")
+        try:
+            response = self.session.delete(
+                self.storage_url + "/object/reelflow-original-videos",
+                json={"prefixes": [storage_path]},
+                timeout=30,
+            )
+        except requests.RequestException as exc:
+            raise QueueApiError("Özel video depolamadan silinemedi (ağ hatası).") from exc
+        if not response.ok and response.status_code != 404:
+            raise QueueApiError(f"Özel video depolamadan silinemedi: HTTP {response.status_code}")
+
+    def upload_temporary_video(self, video_path: Path, expires_seconds: int = 14400) -> tuple[str, str]:
+        """Store a converted library file privately for Meta to ingest; never use the public uploader."""
+        if not video_path.is_file():
+            raise QueueApiError("Dönüştürülmüş özel video bulunamadı.")
+        size_bytes = video_path.stat().st_size
+        if size_bytes < 1 or size_bytes > 50 * 1024 * 1024:
+            raise QueueApiError(
+                "Instagram için dönüştürülen dosya Supabase Free'ın 50 MB sınırını aşıyor; "
+                "orijinali korudum. Daha küçük/uyumlu bir MP4 yükle."
+            )
+        storage_path = f"worker-temp/{uuid4().hex}.mp4"
+        try:
+            registered = self.session.post(
+                self.temporary_video_objects_url,
+                json={"storage_path": storage_path}, timeout=30,
+            )
+        except requests.RequestException as exc:
+            raise QueueApiError("Özel geçici video kaydı oluşturulamadı (ağ hatası).") from exc
+        if not registered.ok:
+            raise QueueApiError(f"Özel geçici video kaydı oluşturulamadı: HTTP {registered.status_code}")
+
+        object_url = f"{self.storage_url}/object/reelflow-original-videos/{quote(storage_path, safe='/')}"
+        try:
+            with video_path.open("rb") as handle:
+                uploaded = self.session.post(
+                    object_url,
+                    data=handle,
+                    headers={"Content-Type": "video/mp4", "x-upsert": "false"},
+                    timeout=(15, 900),
+                )
+        except (OSError, requests.RequestException) as exc:
+            raise QueueApiError(f"Dönüştürülmüş özel video depolanamadı: {type(exc).__name__}") from exc
+        if not uploaded.ok:
+            raise QueueApiError(f"Dönüştürülmüş özel video depolanamadı: HTTP {uploaded.status_code}")
+
+        try:
+            signed_response = self.session.post(
+                f"{self.storage_url}/object/sign/reelflow-original-videos/{quote(storage_path, safe='/')}",
+                json={"expiresIn": max(600, min(int(expires_seconds), 604800))}, timeout=30,
+            )
+        except requests.RequestException as exc:
+            raise QueueApiError("Meta için süreli özel video bağlantısı üretilemedi.") from exc
+        if not signed_response.ok:
+            raise QueueApiError(f"Meta için süreli özel video bağlantısı üretilemedi: HTTP {signed_response.status_code}")
+        try:
+            payload = signed_response.json()
+        except ValueError as exc:
+            raise QueueApiError("Süreli özel video bağlantısı yanıtı geçersiz.") from exc
+        signed = str(payload.get("signedURL") or payload.get("signedUrl") or "") if isinstance(payload, dict) else ""
+        if signed.startswith("https://"):
+            signed_url = signed
+        elif signed.startswith("/storage/v1/"):
+            signed_url = self.project_url + signed
+        elif signed.startswith("/object/"):
+            signed_url = self.storage_url + signed
+        elif signed.startswith("object/"):
+            signed_url = self.storage_url + "/" + signed
+        else:
+            raise QueueApiError("Süreli özel video bağlantısı HTTPS adresi değil.")
+        parsed = urlsplit(signed_url)
+        expected_path = f"/storage/v1/object/sign/reelflow-original-videos/{quote(storage_path, safe='/')}"
+        if (parsed.scheme != "https" or parsed.netloc != urlsplit(self.project_url).netloc
+                or parsed.path != expected_path or "token=" not in parsed.query):
+            raise QueueApiError("Süreli özel video bağlantısının kapsamı doğrulanamadı.")
+        return storage_path, signed_url
+
+    def delete_temporary_video(self, storage_path: str) -> None:
+        if not re.fullmatch(r"worker-temp/[0-9a-f]{32}\.mp4", storage_path):
+            raise QueueApiError("Geçici video yolu güvenli değil.")
+        try:
+            response = self.session.delete(
+                self.storage_url + "/object/reelflow-original-videos",
+                json={"prefixes": [storage_path]}, timeout=30,
+            )
+        except requests.RequestException as exc:
+            raise QueueApiError("Geçici özel video silinemedi (ağ hatası).") from exc
+        if not response.ok and response.status_code != 404:
+            raise QueueApiError(f"Geçici özel video silinemedi: HTTP {response.status_code}")
+        params = urlencode({"storage_path": f"eq.{storage_path}"})
+        try:
+            recorded = self.session.delete(self.temporary_video_objects_url + "?" + params, timeout=30)
+        except requests.RequestException as exc:
+            raise QueueApiError("Geçici video temizlik kaydı kaldırılamadı (ağ hatası).") from exc
+        if not recorded.ok:
+            raise QueueApiError(f"Geçici video temizlik kaydı kaldırılamadı: HTTP {recorded.status_code}")
+
+    def cleanup_stale_temporary_videos(self, older_than_hours: int = 12, limit: int = 50) -> int:
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=max(6, older_than_hours))).isoformat()
+        params = urlencode({
+            "select": "storage_path",
+            "created_at": f"lt.{cutoff}",
+            "order": "created_at.asc",
+            "limit": str(max(1, min(limit, 200))),
+        })
+        try:
+            response = self.session.get(self.temporary_video_objects_url + "?" + params, timeout=30)
+        except requests.RequestException as exc:
+            raise QueueApiError("Süre aşımı dolan özel geçici videolar listelenemedi.") from exc
+        rows = self._rows(response, "eski özel geçici videolar")
+        cleaned = 0
+        for row in rows:
+            try:
+                self.delete_temporary_video(str(row.get("storage_path") or ""))
+                cleaned += 1
+            except QueueApiError:
+                LOGGER.exception("Süre aşımı dolan özel geçici video temizlenemedi.")
+        return cleaned
+
+    def finish_uploaded_video_cleanup(self, video_id: str) -> bool:
+        try:
+            response = self.session.post(
+                self.rpc_url + "/finish_uploaded_video_cleanup",
+                json={"p_uploaded_video_id": video_id}, timeout=30,
+            )
+        except requests.RequestException as exc:
+            raise QueueApiError("Özel video arşiv kaydı güncellenemedi (ağ hatası).") from exc
+        if not response.ok:
+            raise QueueApiError(f"Özel video arşiv kaydı güncellenemedi: HTTP {response.status_code}")
+        try:
+            return response.json() is True
+        except ValueError as exc:
+            raise QueueApiError("Özel video arşiv yanıtı geçersiz.") from exc
+
+    def cleanup_uploaded_videos(self, limit: int = 50) -> int:
+        cleaned = 0
+        for item in self.claim_uploaded_video_cleanups(limit):
+            video_id = str(item.get("uploaded_video_id") or "")
+            path = str(item.get("storage_path") or "")
+            try:
+                self.delete_uploaded_video_object(path)
+                if not self.finish_uploaded_video_cleanup(video_id):
+                    raise QueueApiError("Özel video silme durumu kaydedilemedi.")
+                cleaned += 1
+                LOGGER.info("Yayın sonrası özel video arşivden temizlendi (%s).", video_id)
+            except QueueApiError:
+                LOGGER.exception("Özel video temizliği başarısız (%s).", video_id or "bilinmeyen kimlik")
+        return cleaned
 
     def instagram_connection(self, account_id: str, user_id: str) -> dict[str, Any] | None:
         account_params = urlencode({
@@ -409,6 +674,26 @@ def _sync_published_instagram_media(queue: SupabaseQueue, settings: Settings) ->
     return removed, restored
 
 
+def _cleanup_uploaded_video_objects(queue: Any, context: str) -> None:
+    cleanup = getattr(queue, "cleanup_uploaded_videos", None)
+    if not callable(cleanup):
+        return
+    try:
+        cleanup()
+    except QueueApiError:
+        LOGGER.exception("%s", context)
+
+
+def _cleanup_stale_temporary_video_objects(queue: Any) -> None:
+    cleanup = getattr(queue, "cleanup_stale_temporary_videos", None)
+    if not callable(cleanup):
+        return
+    try:
+        cleanup()
+    except QueueApiError:
+        LOGGER.exception("Süre aşımı dolan özel geçici video temizliği başlatılamadı.")
+
+
 def run_worker() -> dict[str, int]:
     project_url = os.getenv("SUPABASE_URL", "").strip()
     service_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
@@ -424,6 +709,8 @@ def run_worker() -> dict[str, int]:
         return {"published": 0, "failed": 0, "skipped": 0}
 
     queue = SupabaseQueue(project_url, service_key)
+    _cleanup_uploaded_video_objects(queue, "Önceki yayınlardan kalan özel video temizliği başlatılamadı.")
+    _cleanup_stale_temporary_video_objects(queue)
     target_reel_id = os.getenv("TARGET_REEL_ID", "").strip()
     if target_reel_id:
         try:
@@ -502,6 +789,7 @@ def run_worker() -> dict[str, int]:
 
         source_file: Path | None = None
         reel_file: Path | None = None
+        temporary_storage_path: str | None = None
         try:
             queue.mark_processed(account_id)
             connection = _active_connection(queue, connection)
@@ -517,19 +805,41 @@ def run_worker() -> dict[str, int]:
                 )
                 skipped += 1
                 continue
-            queue.update(job, progress=10, stage="Reel indiriliyor")
-            source_file = download_reel(
-                str(job["source_url"]), str(job["shortcode"]), settings.download_dir, settings.cookies_file
-            )
-            queue.update(job, progress=35, stage="Video indirildi · dikey formata hazırlanıyor")
-            reel_file = prepare_for_reels(source_file, settings.download_dir)
-            queue.update(job, progress=62, stage=f"Video hazırlandı · @{connection['username']} hesabına yükleniyor")
-            caption = str(job.get("caption") or settings.default_caption).replace("{source_url}", str(job["source_url"]))
-            media_id = publisher.publish_reel(
-                reel_file,
-                caption,
-                progress_callback=PublicationProgress(queue, job, initial_progress=62),
-            )
+            source_url = str(job.get("source_url") or "")
+            uploaded_video_id = str(job.get("uploaded_video_id") or "")
+            public_video_url: str | None = None
+            if uploaded_video_id:
+                queue.update(job, progress=10, stage="Özel video arşivinden indiriliyor")
+                source_file, signed_url = queue.download_uploaded_video(job, settings.download_dir)
+                if original_reel_is_meta_compatible(source_file):
+                    reel_file = source_file
+                    public_video_url = signed_url
+                    queue.update(job, progress=62, stage=f"Özel arşiv · süreli bağlantı @{connection['username']} hesabına hazır")
+                else:
+                    queue.update(job, progress=35, stage="Video uyumluluğu düzenleniyor · Instagram biçimine hazırlanıyor")
+                    reel_file = prepare_for_reels(source_file, settings.download_dir)
+                    temporary_storage_path, public_video_url = queue.upload_temporary_video(reel_file)
+                    queue.update(job, progress=62, stage=f"Dönüştürülen video özel depoda · @{connection['username']} hesabına hazır")
+            else:
+                queue.update(job, progress=10, stage="Reel indiriliyor")
+                source_file = download_reel(source_url, str(job["shortcode"]), settings.download_dir, settings.cookies_file)
+                queue.update(job, progress=35, stage="Video indirildi · dikey formata hazırlanıyor")
+                reel_file = prepare_for_reels(source_file, settings.download_dir)
+                queue.update(job, progress=62, stage=f"Video hazırlandı · @{connection['username']} hesabına yükleniyor")
+            caption = str(job.get("caption") or settings.default_caption).replace("{source_url}", source_url)
+            progress_callback = PublicationProgress(queue, job, initial_progress=62)
+            if public_video_url:
+                media_id = publisher.publish_reel(
+                    reel_file, caption, progress_callback=progress_callback, public_video_url=public_video_url,
+                )
+            else:
+                media_id = publisher.publish_reel(reel_file, caption, progress_callback=progress_callback)
+            if temporary_storage_path:
+                try:
+                    queue.delete_temporary_video(temporary_storage_path)
+                    temporary_storage_path = None
+                except QueueApiError:
+                    LOGGER.exception("Meta yayını tamamlandı fakat dönüştürülmüş özel geçici video silinemedi; süre aşımı temizliği yeniden deneyecek.")
             published += 1
             connection = {**connection, "last_published_at": datetime.now(timezone.utc).isoformat()}
             connections[account_id] = connection
@@ -560,6 +870,8 @@ def run_worker() -> dict[str, int]:
                 skipped += 1
                 continue
             LOGGER.info("Reel Instagram hesabında yayınlandı: %s", job["shortcode"])
+            if uploaded_video_id:
+                _cleanup_uploaded_video_objects(queue, "Yayın sonrası özel video temizliği ertelendi.")
         except (DownloadError, MediaError, InstagramApiError, ValueError, OSError, QueueApiError) as exc:
             safe_error = str(exc).replace(str(connection.get("access_token", "")), "[TOKEN]")[:1000]
             _mark_failed(queue, job, safe_error)
@@ -573,6 +885,7 @@ def run_worker() -> dict[str, int]:
     except QueueApiError:
         LOGGER.exception("Instagram medya eşitleme turu başlatılamadı.")
 
+    _cleanup_uploaded_video_objects(queue, "Yayın sonrası özel video temizliği tamamlanamadı.")
     return {"published": published, "failed": failed, "skipped": skipped}
 
 

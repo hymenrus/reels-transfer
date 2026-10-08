@@ -65,7 +65,7 @@ test('new queue submissions pin every Reel to its captured target Instagram acco
   assert.match(addToQueue, /const assignments = resolveReelTargetAssignments\(parsed\.items, state\.reelAccountTargets, state\.instagram\.id\)/);
   assert.match(addToQueue, /p_instagram_account_id: targetByShortcode\.get\(item\.shortcodeKey\)/);
   assert.match(source, /assign_reel_account/);
-  assert.match(source, /select\('id,instagram_account_id,shortcode/);
+  assert.match(source, /select\('id,instagram_account_id,uploaded_video_id,shortcode/);
 });
 
 test('each URL can target a different account and enqueue uses its own selected account ID', () => {

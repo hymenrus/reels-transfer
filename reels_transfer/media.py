@@ -8,12 +8,14 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+from fractions import Fraction
 from pathlib import Path
 
 REQUIRED_TOOLS = ("ffmpeg", "ffprobe")
 TARGET_WIDTH = 1080
 TARGET_HEIGHT = 1920
 MAX_DURATION_SECONDS = 15 * 60  # Reels üst sınırı: 15 dakika
+MIN_DURATION_SECONDS = 3
 FALLBACK_SILENT_AUDIO = "anullsrc=channel_layout=stereo:sample_rate=44100"
 
 
@@ -69,6 +71,54 @@ def _duration(info: dict) -> float:
         return float(info.get("format", {}).get("duration") or 0.0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def original_reel_is_meta_compatible(source_file: Path) -> bool:
+    """Return whether Meta can ingest an original MP4/MOV without re-encoding."""
+    if not source_file.exists():
+        raise MediaError("Arşivdeki özgün video bulunamadı.")
+    ensure_tools_available()
+    info = probe(source_file)
+    duration = _duration(info)
+    if duration < MIN_DURATION_SECONDS:
+        if duration > 0:
+            raise MediaError(f"Video çok kısa: en az {MIN_DURATION_SECONDS} saniye olmalı.")
+        return False
+    if duration > MAX_DURATION_SECONDS:
+        raise MediaError(f"Video çok uzun: {duration:.0f} sn (üst sınır {MAX_DURATION_SECONDS} sn).")
+    if source_file.suffix.lower() not in {".mp4", ".mov"}:
+        return False
+    formats = set(str(info.get("format", {}).get("format_name") or "").lower().split(","))
+    if not formats.intersection({"mov", "mp4"}):
+        return False
+    streams = info.get("streams", [])
+    video_streams = [stream for stream in streams if stream.get("codec_type") == "video"]
+    audio_streams = [stream for stream in streams if stream.get("codec_type") == "audio"]
+    if not video_streams or not audio_streams:
+        return False
+    if video_streams[0].get("codec_name") not in {"h264", "hevc"}:
+        return False
+    try:
+        video = video_streams[0]
+        fps = float(Fraction(str(video.get("avg_frame_rate") or video.get("r_frame_rate") or "0/1")))
+        width = int(video.get("width") or 0)
+        height = int(video.get("height") or 0)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return False
+    if fps < 23 or fps > 60 or width < 1 or height < 1 or width > 1920:
+        return False
+    if width / height < 0.01 or width / height > 10:
+        return False
+    if any(stream.get("codec_name") != "aac" for stream in audio_streams):
+        return False
+    try:
+        if any(int(stream.get("sample_rate") or 0) > 48000 for stream in audio_streams):
+            return False
+    except (TypeError, ValueError):
+        return False
+    if any((stream.get("tags") or {}).get("rotate") for stream in video_streams):
+        return False
+    return True
 
 
 def prepare_for_reels(source_file: Path, output_dir: Path) -> Path:
