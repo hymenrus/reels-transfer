@@ -81,7 +81,7 @@ grant execute on function public.retry_failed_reel(uuid) to authenticated;
 -- Multi-user Instagram Login extension (also applied in migrations/202610070001_multi_user_instagram.sql)
 create table if not exists public.instagram_accounts (
   user_id uuid primary key references auth.users(id) on delete cascade,
-  instagram_user_id text not null unique,
+  instagram_user_id text not null,
   username text not null,
   granted_scopes text[] not null default '{}',
   connected_at timestamptz not null default now(),
@@ -89,6 +89,8 @@ create table if not exists public.instagram_accounts (
   last_processed_at timestamptz,
   updated_at timestamptz not null default now()
 );
+create unique index if not exists instagram_accounts_user_instagram_user_id_key
+  on public.instagram_accounts (user_id, instagram_user_id);
 create table if not exists public.instagram_credentials (
   user_id uuid primary key references public.instagram_accounts(user_id) on delete cascade,
   access_token text not null,
@@ -415,17 +417,16 @@ BEGIN
     p_user_id, p_instagram_user_id, p_username, p_granted_scopes,
     now(), p_token_expires_at, NULL, now()
   )
-  ON CONFLICT (instagram_user_id) DO UPDATE SET
+  ON CONFLICT (user_id, instagram_user_id) DO UPDATE SET
     username = EXCLUDED.username,
     granted_scopes = EXCLUDED.granted_scopes,
     connected_at = now(),
     token_expires_at = EXCLUDED.token_expires_at,
     disconnected_at = NULL,
     updated_at = now()
-  WHERE public.instagram_accounts.user_id = EXCLUDED.user_id
   RETURNING id INTO v_account_id;
 
-  IF v_account_id IS NULL THEN RAISE EXCEPTION 'Instagram account already linked'; END IF;
+  IF v_account_id IS NULL THEN RAISE EXCEPTION 'Instagram connection could not be saved'; END IF;
 
   INSERT INTO public.instagram_credentials (user_id, instagram_account_id, access_token, refreshed_at, updated_at)
   VALUES (p_user_id, v_account_id, p_access_token, now(), now())
