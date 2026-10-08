@@ -1805,8 +1805,7 @@ supabase.auth.onAuthStateChange((event, session) => {
     state.session = session;
     state.instagram = null;
     renderShell();
-    await loadInstagramAccount();
-    await loadQueue();
+    await Promise.all([loadInstagramAccount(), loadQueue()]);
   } else {
     renderLogin();
   }
