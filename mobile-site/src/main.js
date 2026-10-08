@@ -368,7 +368,7 @@ function renderReelTargetAssignments() {
           : state.videoCoverImages.length ? '<small class="reel-cover-note">Seçmezsen arşivindeki kapaklardan rastgele atanır.</small>'
             : '<small class="reel-cover-note">Kütüphanede kapak yok; videonun karesi kullanılacak.</small>';
     const coverDisabled = state.uploadedVideosLoading ? ' disabled' : '';
-    const automaticCoverLabel = state.videoCoverImages.length ? 'Otomatik · rastgele kapak' : 'Kapak yok · videodan kare';
+    const automaticCoverLabel = state.videoCoverImages.length ? 'Rastgele · yüklenmiş kapaklardan' : 'Kapak yok · videodan kare';
     const status = targetAvailable
       ? `Hedef hesap: @${escapeHtml(targetAccount?.username || '')}`
       : 'Bu hesap bağlantısı kesilmiş; yeniden bağla veya başka hedef seç.';
