@@ -7,3 +7,13 @@ export function extractInstagramProfile(payload, fallbackUserId = '') {
     username: String(profile.username || '').trim(),
   };
 }
+
+export function extractLongLivedToken(payload) {
+  const body = payload && typeof payload === 'object' ? payload : {};
+  const nested = Array.isArray(body.data) ? body.data[0] : body.data;
+  const tokenData = nested && typeof nested === 'object' ? nested : body;
+  return {
+    accessToken: String(tokenData.access_token || '').trim(),
+    expiresIn: Number(tokenData.expires_in || 0),
+  };
+}

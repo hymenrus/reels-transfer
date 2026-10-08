@@ -1,5 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { extractInstagramProfile } from "./instagram-profile.js";
+import { extractInstagramProfile, extractLongLivedToken } from "./instagram-profile.js";
 
 function envKey(name: string, bundleName: string): string {
   const direct = Deno.env.get(name);
@@ -75,9 +75,25 @@ Deno.serve(async (req: Request) => {
     longUrl.searchParams.set("access_token", shortToken);
     const longResponse = await fetch(longUrl.toString());
     const longBody = await longResponse.json();
-    const longToken = String(longBody?.access_token || "");
-    const expiresIn = Number(longBody?.expires_in || 0);
-    if (!longResponse.ok || !longToken || !Number.isFinite(expiresIn) || expiresIn < 3600) return appRedirect("long_token_failed");
+    const { accessToken: longToken, expiresIn } = extractLongLivedToken(longBody);
+    if (!longResponse.ok || !longToken || !Number.isFinite(expiresIn) || expiresIn < 3600) {
+      const metaError = longBody?.error && typeof longBody.error === "object" ? longBody.error : {};
+      const safeNumber = (value: unknown) => {
+        const parsed = Number(value);
+        return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
+      };
+      const rawType = String(metaError.type || "");
+      const safeType = /^[A-Za-z0-9_]{1,40}$/.test(rawType) ? rawType : null;
+      const reason = !longResponse.ok ? "http_error" : !longToken ? "token_missing" : "expiry_invalid";
+      console.error("Instagram long-token exchange failed:", JSON.stringify({
+        http_status: longResponse.status,
+        reason,
+        meta_error_type: safeType,
+        meta_error_code: safeNumber(metaError.code),
+        meta_error_subcode: safeNumber(metaError.error_subcode),
+      }));
+      return appRedirect("long_token_failed");
+    }
 
     const profileUrl = new URL("https://graph.instagram.com/v26.0/me");
     profileUrl.searchParams.set("fields", "user_id,username");
