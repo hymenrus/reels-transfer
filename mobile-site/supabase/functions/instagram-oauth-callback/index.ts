@@ -14,6 +14,8 @@ async function sha256(value: string): Promise<string> {
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
 }
 function appRedirect(result: string): Response {
+  const safeResults = new Set(["connected", "cancelled", "setup_required", "permissions_missing", "account_already_linked", "connection_save_failed", "state_invalid", "token_exchange_failed", "long_token_failed", "profile_lookup_failed", "connection_failed"]);
+  console.log("Instagram OAuth result:", safeResults.has(result) ? result : "unknown");
   const base = Deno.env.get("APP_SITE_URL") || "https://hymenrus.github.io/reels-transfer/";
   const target = new URL(base);
   target.searchParams.set("instagram", result);

@@ -393,8 +393,9 @@ function renderInstagramAccount() {
   });
   const oauthStatus = card.querySelector('#instagram-connect-status');
   if (oauthStatus && state.instagramConnectionMessage) {
-    oauthStatus.textContent = state.instagramConnectionMessage.message;
+    oauthStatus.textContent = `${state.instagramConnectionMessage.message} (kod: ${state.instagramConnectionMessage.result})`;
     oauthStatus.dataset.state = state.instagramConnectionMessage.type;
+    oauthStatus.dataset.result = state.instagramConnectionMessage.result;
   }
   const addButton = document.querySelector('#add-submit');
   if (addButton) addButton.disabled = !state.instagram;
@@ -531,21 +532,23 @@ function consumeInstagramCallback() {
     connected: ['Instagram hesabın bağlandı.', 'success'],
     cancelled: ['Instagram izin ekranı tamamlanmadı. Test modunda hesabın Instagram Testers listesinde ve daveti kabul edilmiş olmalı; Business/Creator hesabı kullan.', 'warn'],
     setup_required: ['Instagram bağlantısı henüz hazır değil; site yöneticisinin Meta App ayarlarını tamamlaması gerekiyor.', 'warn'],
-    permissions_missing: ['Yayın için gerekli Instagram izinleri verilmedi.', 'warn'],
+    permissions_missing: ['İzinler eksik. Test modunda her Instagram hesabı Instagram Testers listesinde olmalı ve daveti kabul etmeli; hesap Business/Creator olmalı.', 'warn'],
     account_already_linked: ['Bu Instagram hesabı başka bir ReelFlow hesabına bağlı. Doğru ReelFlow oturumuyla giriş yapıp yeniden dene.', 'error'],
     connection_save_failed: ['Instagram doğrulandı ama hesap ReelFlow’a kaydedilemedi. Tekrar dene; sürerse yalnızca bu ekrandaki hata mesajını paylaş.', 'error'],
     state_invalid: ['Güvenli bağlantı süresi doldu. Yeniden bağlanmayı dene.', 'error'],
     token_exchange_failed: ['Meta giriş kodu doğrulanamadı. Yeniden bağlanmayı dene.', 'error'],
     long_token_failed: ['Instagram erişimi güvenli şekilde uzatılamadı.', 'error'],
-    profile_lookup_failed: ['Instagram profesyonel hesap bilgisi alınamadı.', 'error'],
+    profile_lookup_failed: ['Meta hesap profilini okuyamadı. Hesabın Business/Creator olduğundan ve tester davetini kabul ettiğinden emin ol.', 'error'],
     connection_failed: ['Instagram bağlantısı tamamlanamadı.', 'error'],
   };
-  const [message, type] = messages[result] || ['Instagram bağlantısı tamamlanamadı.', 'error'];
-  state.instagramConnectionMessage = { message, type };
+  const safeResult = Object.hasOwn(messages, result) ? result : 'unknown';
+  const [message, type] = messages[safeResult] || ['Instagram bağlantısı tamamlanamadı.', 'error'];
+  state.instagramConnectionMessage = { message, type, result: safeResult };
   const status = document.querySelector('#instagram-connect-status');
   if (status) {
-    status.textContent = message;
+    status.textContent = `${message} (kod: ${safeResult})`;
     status.dataset.state = type;
+    status.dataset.result = safeResult;
   }
   toast(message, type);
   requestAnimationFrame(() => document.querySelector('#instagram-account-card')?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
