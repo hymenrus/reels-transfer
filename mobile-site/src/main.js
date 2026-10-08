@@ -10,7 +10,7 @@ const root = document.querySelector('#app');
 const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
 });
-const state = { session: null, rows: [], instagram: null, instagramAccounts: [], reelAccountTargets: {}, reelCaptionTemplateSelections: {}, captionTemplates: [], captionTemplatesLoading: false, captionTemplatesError: '', selectedCaptionTemplateId: '', uploadedVideos: [], videoImports: [], uploadedVideosLoading: false, uploadedVideosError: '', uploadedVideoDrafts: {}, uploadedVideoDraftsUserId: '', videoImportBusy: false, videoLibraryFilter: '', preferNewestInstagramAccount: false, instagramConnectionMessage: null, filter: 'all', theme: localStorage.getItem('reelflow-theme') || 'dark', installPrompt: null, busy: false };
+const state = { session: null, rows: [], instagram: null, instagramAccounts: [], reelAccountTargets: {}, reelCaptionTemplateSelections: {}, captionTemplates: [], captionTemplatesLoading: false, captionTemplatesError: '', selectedCaptionTemplateId: '', uploadedVideos: [], videoImports: [], uploadedVideosLoading: false, uploadedVideosError: '', uploadedVideoDrafts: {}, uploadedVideoDraftsUserId: '', videoImportBusy: false, videoImportFilter: 'all', videoLibraryFilter: '', preferNewestInstagramAccount: false, instagramConnectionMessage: null, filter: 'all', theme: localStorage.getItem('reelflow-theme') || 'dark', installPrompt: null, busy: false };
 let instagramAccountLoadGeneration = 0;
 let captionTemplateLoadGeneration = 0;
 let videoLibraryLoadGeneration = 0;
@@ -55,6 +55,11 @@ function toast(message, type = 'info') {
 }
 function fmtDate(value) {
   return new Intl.DateTimeFormat('tr-TR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(value));
+}
+function fmtHistoryDate(value) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return '';
+  return new Intl.DateTimeFormat('tr-TR', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(date);
 }
 const REEL_DRAFT_STORAGE_PREFIX = 'reelflow-draft-v1';
 const VIDEO_DRAFT_STORAGE_PREFIX = 'reelflow-video-drafts-v1';
@@ -261,7 +266,11 @@ function renderShell() {
               <label class="rights-check video-import-rights"><input id="video-import-rights" type="checkbox" /><span>Bu videoları saklama ve paylaşma hakkım var veya izin aldım.</span></label>
               <button class="button button-primary" type="submit" id="video-import-submit">${icon('plus', 17)} Buluta kaydet</button>
             </form>
-            <div id="video-import-status-list" class="video-import-status-list" aria-live="polite"></div>
+            <section class="video-history-panel" aria-labelledby="video-history-title">
+              <div class="video-history-heading"><div><span class="eyebrow">SON 50 İŞLEM</span><h3 id="video-history-title">İndirme durumu ve geçmiş</h3></div><button type="button" class="mini-button" data-action="refresh-uploaded-videos" aria-label="İndirme geçmişini yenile">Yenile</button></div>
+              <div class="video-history-filters" role="tablist" aria-label="İndirme geçmişi filtresi"><button type="button" class="video-history-filter active" data-import-filter="all" aria-pressed="true">Tümü <span id="video-history-count-all">0</span></button><button type="button" class="video-history-filter" data-import-filter="active" aria-pressed="false">Sırada / indiriliyor <span id="video-history-count-active">0</span></button><button type="button" class="video-history-filter" data-import-filter="ready" aria-pressed="false">Tamamlandı <span id="video-history-count-ready">0</span></button><button type="button" class="video-history-filter" data-import-filter="failed" aria-pressed="false">Hata <span id="video-history-count-failed">0</span></button></div>
+              <div id="video-import-status-list" class="video-history-list" aria-live="polite"></div>
+            </section>
             <div id="video-library-list" class="video-library-list"><div class="loading-row"><span class="spinner"></span> Video arşivi yükleniyor…</div></div>
           </section>
           <section class="panel queue-panel" id="queue-section">
@@ -608,8 +617,8 @@ async function loadUploadedVideos(silent = false) {
       .select('id,user_id,original_filename,storage_path,mime_type,size_bytes,cleanup_pending,created_at,source_shortcode')
       .eq('user_id', userId).order('created_at', { ascending: false }).limit(100),
     supabase.from('video_import_jobs')
-      .select('id,user_id,shortcode,source_url,status,progress,stage,error_message,created_at')
-      .eq('user_id', userId).in('status', ['queued', 'processing', 'failed'])
+      .select('id,shortcode,status,progress,stage,error_message,attempts,uploaded_video_id,created_at,updated_at,finished_at')
+      .eq('user_id', userId)
       .order('created_at', { ascending: false }).limit(50),
   ]);
   if (generation !== videoLibraryLoadGeneration || state.session?.user?.id !== userId) return;
@@ -630,19 +639,67 @@ async function loadUploadedVideos(silent = false) {
 function renderVideoImportStatuses() {
   const holder = document.querySelector('#video-import-status-list');
   if (!holder) return;
-  const activeCount = state.videoImports.filter((job) => ['queued', 'processing'].includes(job.status)).length;
-  if (!state.videoImports.length) {
-    holder.innerHTML = '';
+  const activeStatuses = ['queued', 'processing'];
+  const activeCount = state.videoImports.filter((job) => activeStatuses.includes(job.status)).length;
+  const readyCount = state.videoImports.filter((job) => job.status === 'ready').length;
+  const failedCount = state.videoImports.filter((job) => job.status === 'failed').length;
+  const counts = { all: state.videoImports.length, active: activeCount, ready: readyCount, failed: failedCount };
+  for (const [key, value] of Object.entries(counts)) {
+    const node = document.querySelector(`#video-history-count-${key}`);
+    if (node) node.textContent = String(value);
+  }
+  const selectedFilter = ['all', 'active', 'ready', 'failed'].includes(state.videoImportFilter) ? state.videoImportFilter : 'all';
+  document.querySelectorAll('[data-import-filter]').forEach((button) => {
+    const selected = button.dataset.importFilter === selectedFilter;
+    button.classList.toggle('active', selected);
+    button.setAttribute('aria-pressed', String(selected));
+  });
+
+  if (state.uploadedVideosLoading && !state.videoImports.length) {
+    holder.innerHTML = '<div class="video-history-empty"><span class="spinner"></span><span>İndirme geçmişi yükleniyor…</span></div>';
     return;
   }
-  holder.innerHTML = state.videoImports.map((job) => {
-    const status = job.status === 'queued' ? 'Bulut kuyruğunda' : job.status === 'processing' ? 'Instagram’dan indiriliyor' : 'İndirme tamamlanamadı';
+  if (!state.videoImports.length) {
+    holder.innerHTML = '<div class="video-history-empty">Henüz bir indirme işlemi yok. Eklediğin Reel URL’lerinin durumu ve geçmişi burada görünecek.</div>';
+    return;
+  }
+
+  const visibleJobs = state.videoImports.filter((job) => {
+    if (selectedFilter === 'active') return activeStatuses.includes(job.status);
+    if (selectedFilter === 'ready' || selectedFilter === 'failed') return job.status === selectedFilter;
+    return true;
+  });
+  if (!visibleJobs.length) {
+    holder.innerHTML = '<div class="video-history-empty">Bu filtrede gösterilecek indirme yok.</div>';
+    return;
+  }
+
+  const statusLabels = { queued: 'Sırada', processing: 'İndiriliyor', ready: 'Tamamlandı', failed: 'Hata', cancelled: 'İptal edildi' };
+  const statusClasses = { queued: 'is-queued', processing: 'is-processing', ready: 'is-ready', failed: 'is-failed', cancelled: 'is-cancelled' };
+  holder.innerHTML = visibleJobs.map((job) => {
+    const status = statusLabels[job.status] || 'Bilinmiyor';
+    const progress = Math.max(0, Math.min(100, Number(job.progress || 0)));
     const detail = job.status === 'failed'
-      ? (job.error_message || 'Bu bağlantıdan video alınamadı. Bağlantıyı kontrol edip tekrar deneyebilirsin.')
-      : job.status === 'queued'
-        ? 'Bulut işçisi sıradaki turunda başlatır.'
-        : `${Math.max(0, Math.min(100, Number(job.progress || 0)))}% · ${job.stage || 'Video işleniyor'}`;
-    return `<article class="video-import-status ${job.status === 'failed' ? 'is-failed' : ''}"><div><strong>/${escapeHtml(job.shortcode)} · ${escapeHtml(status)}</strong><small>${escapeHtml(detail)}</small></div>${job.status === 'failed' ? `<button type="button" class="mini-button" data-action="retry-video-import" data-id="${escapeHtml(job.id)}">Tekrar dene</button>` : '<span class="video-import-spinner" aria-hidden="true"></span>'}</article>`;
+      ? (job.error_message || job.stage || 'Bu bağlantıdan video alınamadı. Tekrar deneyebilirsin.')
+      : job.status === 'processing'
+        ? `${progress}% · ${job.stage || 'Video işleniyor'}`
+        : job.status === 'ready'
+          ? (job.stage || 'Video özel bulut arşivine kaydedildi')
+          : job.status === 'cancelled'
+            ? (job.stage || 'İşlem iptal edildi')
+            : (job.stage || 'Bulut işçisi sırayı bekliyor');
+    const createdDate = job.created_at ? fmtHistoryDate(job.created_at) : '';
+    const finishedDate = job.finished_at ? fmtHistoryDate(job.finished_at) : '';
+    const attempts = Math.max(0, Number(job.attempts || 0));
+    const meta = [createdDate ? `Eklendi ${createdDate}` : '', finishedDate ? `Bitti ${finishedDate}` : '', attempts ? `Deneme ${attempts}` : ''].filter(Boolean).join(' · ');
+    const mark = job.status === 'ready' ? icon('check', 15) : job.status === 'failed' ? icon('alert', 15) : job.status === 'processing' ? '<span class="video-import-spinner" aria-hidden="true"></span>' : icon('clock', 15);
+    const progressBar = activeStatuses.includes(job.status)
+      ? `<div class="video-history-progress" role="progressbar" aria-label="İndirme ilerlemesi" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}"><span style="width:${job.status === 'queued' ? 0 : progress}%"></span></div>`
+      : '';
+    const retryButton = job.status === 'failed'
+      ? `<button type="button" class="mini-button" data-action="retry-video-import" data-id="${escapeHtml(job.id)}">Tekrar dene</button>`
+      : '';
+    return `<article class="video-history-item ${statusClasses[job.status] || ''}"><span class="video-history-mark">${mark}</span><div class="video-history-main"><div class="video-history-title"><strong>/${escapeHtml(job.shortcode)}</strong><span>${escapeHtml(status)}</span></div><small class="video-history-detail">${escapeHtml(detail)}</small>${meta ? `<small class="video-history-meta">${escapeHtml(meta)}</small>` : ''}${progressBar}</div>${retryButton}</article>`;
   }).join('');
   const navCount = document.querySelector('#video-nav-count');
   const count = document.querySelector('#video-library-count');
@@ -1368,6 +1425,11 @@ async function handleClick(event) {
   }
   if (button.dataset.action === 'refresh-uploaded-videos') {
     await loadUploadedVideos();
+    return;
+  }
+  if (button.dataset.importFilter) {
+    state.videoImportFilter = button.dataset.importFilter;
+    renderVideoImportStatuses();
     return;
   }
   if (button.dataset.action === 'retry-video-import') {

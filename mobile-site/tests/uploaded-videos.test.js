@@ -71,6 +71,14 @@ test('migrations keep originals private and add owner-isolated, retryable URL im
 
 test('PWA queues URL-only archive imports and supports local bulk TXT lists', () => {
   assert.match(app, /id="video-library-section"/);
+  assert.match(app, /İndirme durumu ve geçmiş/);
+  assert.match(app, /data-import-filter="active"/);
+  assert.match(app, /data-import-filter="ready"/);
+  assert.match(app, /data-import-filter="failed"/);
+  assert.match(app, /uploaded_video_id,created_at,updated_at,finished_at/);
+  assert.match(app, /statusLabels = \{ queued: 'Sırada', processing: 'İndiriliyor', ready: 'Tamamlandı', failed: 'Hata', cancelled: 'İptal edildi' \}/);
+  assert.match(app, /video-history-progress/);
+  assert.match(app, /fmtHistoryDate/);
   assert.match(app, /id="video-import-form"/);
   assert.match(app, /id="video-import-urls"/);
   assert.match(app, /data-action="paste-video-import-urls"/);
