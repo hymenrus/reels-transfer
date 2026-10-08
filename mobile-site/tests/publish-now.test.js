@@ -57,12 +57,25 @@ test('saved templates are shared per ReelFlow user rather than scoped to the sel
   assert.doesNotMatch(remove, /instagram_account_id/);
 });
 
-test('new queue submissions pin every Reel to the captured selected Instagram account', () => {
+test('new queue submissions pin every Reel to its captured target Instagram account', () => {
   const start = source.indexOf('async function addToQueue(form)');
   const end = source.indexOf('async function handleClick(event)', start);
   const addToQueue = source.slice(start, end);
-  assert.match(addToQueue, /const targetInstagramAccountId = state\.instagram\.id/);
-  assert.match(addToQueue, /p_instagram_account_id: targetInstagramAccountId/);
+  assert.match(addToQueue, /const assignments = resolveReelTargetAssignments\(parsed\.items, state\.reelAccountTargets, state\.instagram\.id\)/);
+  assert.match(addToQueue, /p_instagram_account_id: targetByShortcode\.get\(item\.shortcodeKey\)/);
   assert.match(source, /assign_reel_account/);
   assert.match(source, /select\('id,instagram_account_id,shortcode/);
+});
+
+test('each URL can target a different account and enqueue uses its own selected account ID', () => {
+  const start = source.indexOf('async function addToQueue(form)');
+  const end = source.indexOf('async function handleClick(event)', start);
+  const addToQueue = source.slice(start, end);
+
+  assert.match(source, /id="reel-target-panel"/);
+  assert.match(source, /data-reel-target-select data-shortcode-key=/);
+  assert.match(addToQueue, /resolveReelTargetAssignments\(parsed\.items, state\.reelAccountTargets, state\.instagram\.id\)/);
+  assert.match(addToQueue, /p_instagram_account_id: targetByShortcode\.get\(item\.shortcodeKey\)/);
+  assert.doesNotMatch(addToQueue, /const targetInstagramAccountId/);
+  assert.match(source, /reelAccountTargets:\s*\{\s*\.\.\.state\.reelAccountTargets\s*\}/);
 });

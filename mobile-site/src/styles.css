@@ -56,3 +56,14 @@
 .caption-template-panel button{min-height:44px;white-space:nowrap}.caption-template-delete{padding:0 13px;border:1px solid var(--line);border-radius:10px;background:transparent;color:var(--muted);font:inherit;font-size:10px;cursor:pointer}.caption-template-save{padding:0 15px;font-size:10px}
 .caption-template-status[data-state=error]{color:var(--red)}
 @media(max-width:560px){.caption-template-panel{gap:9px;padding:12px}.caption-template-select-row,.caption-template-save-row{grid-template-columns:minmax(0,1fr)}.caption-template-panel button{width:100%;justify-content:center}.caption-template-panel select,.caption-template-panel input,.caption-template-panel textarea{font-size:16px}.caption-template-heading strong{font-size:12px}.caption-template-heading small,.caption-template-note{font-size:10px}}
+
+
+/* Per-Reel account routing: one clear target control for each parsed URL. */
+.reel-target-panel{display:grid;gap:10px;margin:8px 0 18px;padding:13px;border:1px solid var(--line);border-radius:13px;background:var(--surface-2)}
+.reel-target-panel[hidden]{display:none}
+.reel-target-heading{display:grid;gap:4px}.reel-target-heading strong{font-size:10px}.reel-target-heading small{color:var(--muted);font-size:8px;line-height:1.5}
+.reel-target-list{display:grid;gap:7px}
+.reel-target-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(160px,240px);align-items:center;gap:12px;padding:9px 10px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+.reel-target-info{display:grid;gap:3px;min-width:0}.reel-target-info strong{font-size:10px;overflow-wrap:anywhere}.reel-target-info small{color:var(--muted);font-size:8px;line-height:1.4}.reel-target-info small.is-unavailable{color:var(--red)}
+.reel-target-row select{box-sizing:border-box;width:100%;min-width:0;min-height:44px;padding:9px 11px;border:1px solid var(--line);border-radius:9px;background:var(--surface-2);color:var(--text);font:inherit;font-size:10px;outline:none}.reel-target-row select:focus{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 15%,transparent)}
+@media(max-width:560px){.reel-target-panel{gap:9px;padding:11px}.reel-target-heading strong{font-size:12px}.reel-target-heading small{font-size:10px}.reel-target-row{grid-template-columns:minmax(0,1fr);gap:7px;padding:10px}.reel-target-info strong{font-size:12px}.reel-target-info small{font-size:10px}.reel-target-row select{min-height:46px;font-size:16px}}

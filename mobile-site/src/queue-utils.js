@@ -4,6 +4,37 @@ export function selectInstagramAccount(accounts = [], savedAccountId = '', prefe
   return connected.find((account) => account.id === savedAccountId) || connected[0] || null;
 }
 
+function reelShortcodeKey(item) {
+  return String(item?.shortcodeKey || item?.shortcode || '').trim().toLowerCase();
+}
+
+export function setReelAccountTarget(targets = {}, shortcodeKey, accountId) {
+  const key = String(shortcodeKey || '').trim().toLowerCase();
+  const id = String(accountId || '').trim();
+  if (!key || !id) return { ...(targets && typeof targets === 'object' && !Array.isArray(targets) ? targets : {}) };
+  return { ...(targets && typeof targets === 'object' && !Array.isArray(targets) ? targets : {}), [key]: id };
+}
+
+export function pruneReelAccountTargets(items = [], targets = {}) {
+  if (!targets || typeof targets !== 'object' || Array.isArray(targets)) return {};
+  const validKeys = new Set(items.map(reelShortcodeKey).filter(Boolean));
+  return Object.fromEntries(Object.entries(targets)
+    .map(([key, id]) => [String(key).trim().toLowerCase(), String(id || '').trim()])
+    .filter(([key, id]) => validKeys.has(key) && id));
+}
+
+export function resolveReelTargetAssignments(items = [], targets = {}, defaultAccountId = '') {
+  const overrides = targets && typeof targets === 'object' && !Array.isArray(targets) ? targets : {};
+  const fallback = String(defaultAccountId || '').trim();
+  return items.map((item) => {
+    const shortcodeKey = reelShortcodeKey(item);
+    return {
+      shortcodeKey,
+      instagramAccountId: String(overrides[shortcodeKey] || fallback).trim(),
+    };
+  });
+}
+
 export function estimateQueueEta(rows = [], accounts = [], now = Date.now()) {
   const estimates = new Map();
   const createdAt = (row) => {

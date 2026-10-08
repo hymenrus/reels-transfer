@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { estimateQueueEta, selectInstagramAccount } from '../src/queue-utils.js';
+import { estimateQueueEta, pruneReelAccountTargets, resolveReelTargetAssignments, selectInstagramAccount, setReelAccountTarget } from '../src/queue-utils.js';
 
 const now = Date.parse('2026-10-08T12:00:00Z');
 const accounts = [
@@ -14,6 +14,27 @@ test('selects the saved account, defaults to newest connected, and selects a new
   assert.equal(selectInstagramAccount(accounts, 'missing')?.id, 'a');
   assert.equal(selectInstagramAccount(accounts, 'a', true)?.id, 'a');
   assert.equal(selectInstagramAccount([{ ...accounts[0], disconnected_at: '2026-10-08T11:00:00Z' }]), null);
+});
+
+test('resolves each Reel to its explicit Instagram account or the selected default', () => {
+  const items = [
+    { shortcode: 'AbC123', shortcodeKey: 'abc123' },
+    { shortcode: 'XyZ456', shortcodeKey: 'xyz456' },
+  ];
+  const targets = setReelAccountTarget({}, 'ABC123', 'account-b');
+  const assignments = resolveReelTargetAssignments(items, targets, 'account-a');
+
+  assert.deepEqual(assignments, [
+    { shortcodeKey: 'abc123', instagramAccountId: 'account-b' },
+    { shortcodeKey: 'xyz456', instagramAccountId: 'account-a' },
+  ]);
+});
+
+test('prunes only target overrides for URLs removed from the draft and preserves others', () => {
+  const items = [{ shortcode: 'AbC123', shortcodeKey: 'abc123' }];
+  const stored = { ABC123: 'account-a', gone123: 'account-b', invalid: '' };
+
+  assert.deepEqual(pruneReelAccountTargets(items, stored), { abc123: 'account-a' });
 });
 
 test('calculates normal queue ETAs independently for each Instagram account', () => {
