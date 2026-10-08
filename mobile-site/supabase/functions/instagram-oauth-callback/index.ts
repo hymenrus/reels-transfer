@@ -1,4 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { extractInstagramProfile } from "./instagram-profile.js";
 
 function envKey(name: string, bundleName: string): string {
   const direct = Deno.env.get(name);
@@ -80,8 +81,7 @@ Deno.serve(async (req: Request) => {
     profileUrl.searchParams.set("fields", "user_id,username");
     const profileResponse = await fetch(profileUrl.toString(), { headers: { Authorization: `Bearer ${longToken}` } });
     const profile = await profileResponse.json();
-    const instagramUserId = String(profile?.user_id || profile?.id || shortData?.user_id || "");
-    const username = String(profile?.username || "");
+    const { instagramUserId, username } = extractInstagramProfile(profile, shortData?.user_id);
     if (!profileResponse.ok || !instagramUserId || !username) return appRedirect("profile_lookup_failed");
 
     const expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString();
