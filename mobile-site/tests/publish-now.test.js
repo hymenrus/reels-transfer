@@ -32,7 +32,8 @@ test('successful queue add clears URLs but retains and persists the caption draf
   assert.match(successBranch, /currentUrlInput\.value = ''/);
   assert.match(successBranch, /saveReelDraft\(\)/);
   assert.doesNotMatch(successBranch, /(?:captionInput|caption-input)\.value\s*=\s*''/);
-  assert.match(source, /const draft = \{ urls: urlInput\.value, caption: captionInput\.value \}/);
+  assert.match(source, /setCaptionForAccount\(/);
+  assert.match(source, /instagram_caption_templates/);
 });
 
 test('new queue submissions pin every Reel to the captured selected Instagram account', () => {

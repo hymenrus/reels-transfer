@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, PUBLISHER_SETUP_READY } from './config.js';
 import { estimateQueueEta, selectInstagramAccount } from './queue-utils.js';
+import { captionForAccount, hasReelDraftContent, setCaptionForAccount, validateCaptionTemplate } from './caption-utils.js';
 import { parseReelLines } from './url-utils.js';
 import './styles.css';
 
@@ -8,8 +9,9 @@ const root = document.querySelector('#app');
 const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
 });
-const state = { session: null, rows: [], instagram: null, instagramAccounts: [], preferNewestInstagramAccount: false, instagramConnectionMessage: null, filter: 'all', theme: localStorage.getItem('reelflow-theme') || 'dark', installPrompt: null, busy: false };
+const state = { session: null, rows: [], instagram: null, instagramAccounts: [], captionTemplates: [], captionTemplatesLoading: false, captionTemplatesError: '', selectedCaptionTemplateId: '', preferNewestInstagramAccount: false, instagramConnectionMessage: null, filter: 'all', theme: localStorage.getItem('reelflow-theme') || 'dark', installPrompt: null, busy: false };
 let instagramAccountLoadGeneration = 0;
+let captionTemplateLoadGeneration = 0;
 let idleQueueRefreshTicks = 0;
 document.documentElement.dataset.theme = state.theme;
 
@@ -66,14 +68,25 @@ function saveActiveInstagramSelection(accountId) {
     console.warn('Seçili Instagram hesabı bu cihazda saklanamadı:', error);
   }
 }
+function readReelDraft() {
+  const key = reelDraftStorageKey();
+  if (!key) return {};
+  try {
+    const draft = JSON.parse(localStorage.getItem(key) || '{}');
+    return draft && typeof draft === 'object' && !Array.isArray(draft) ? draft : {};
+  } catch (error) {
+    console.warn('Reel taslağı bu cihazdan geri yüklenemedi:', error);
+    return {};
+  }
+}
 function saveReelDraft() {
   const key = reelDraftStorageKey();
   const urlInput = document.querySelector('#reel-input');
   const captionInput = document.querySelector('#caption-input');
   if (!key || !urlInput || !captionInput) return;
-  const draft = { urls: urlInput.value, caption: captionInput.value };
+  const draft = setCaptionForAccount({ ...readReelDraft(), urls: urlInput.value }, state.instagram?.id, captionInput.value);
   try {
-    if (!draft.urls.trim() && !draft.caption.trim()) localStorage.removeItem(key);
+    if (!hasReelDraftContent(draft)) localStorage.removeItem(key);
     else localStorage.setItem(key, JSON.stringify(draft));
   } catch (error) {
     console.warn('Reel taslağı bu cihazda saklanamadı:', error);
@@ -83,15 +96,13 @@ function restoreReelDraft() {
   const key = reelDraftStorageKey();
   if (!key) return;
   try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return;
-    const draft = JSON.parse(raw);
-    if (!draft || typeof draft !== 'object') return;
+    const draft = readReelDraft();
     const urlInput = document.querySelector('#reel-input');
     const captionInput = document.querySelector('#caption-input');
     if (urlInput && typeof draft.urls === 'string') urlInput.value = draft.urls;
-    if (captionInput && typeof draft.caption === 'string') captionInput.value = draft.caption.slice(0, 2200);
+    if (captionInput) captionInput.value = captionForAccount(draft, state.instagram?.id).slice(0, 2200);
     updateInputCounter(urlInput?.value || '');
+    if (state.instagram?.id) saveReelDraft();
   } catch (error) {
     console.warn('Reel taslağı bu cihazdan geri yüklenemedi:', error);
   }
@@ -193,10 +204,16 @@ function renderShell() {
                 <div class="input-meta"><span id="input-counter">0 bağlantı</span><button type="button" id="paste-button" class="text-button">Panodan yapıştır</button></div>
                 <label for="caption-input">Paylaşım açıklaması <span class="muted">(isteğe bağlı, tüm Reels'lere uygulanır)</span></label>
                 <textarea id="caption-input" rows="3" maxlength="2200" placeholder="Bu sefer eklediğin Reels'ler için açıklama yaz…"></textarea>
+                <section class="caption-template-panel" aria-label="Açıklama şablonları">
+                  <div class="caption-template-heading"><strong>Kayıtlı açıklama şablonları</strong><small id="caption-template-status" class="caption-template-status" role="status" aria-live="polite">Instagram hesabı yükleniyor…</small></div>
+                  <div class="caption-template-select-row"><label class="sr-only" for="caption-template-select">Açıklama şablonu seç</label><select id="caption-template-select" disabled><option value="">Şablon seç…</option></select><button type="button" id="delete-caption-template" class="caption-template-delete" disabled>Seçileni sil</button></div>
+                  <div class="caption-template-save-row"><label class="sr-only" for="caption-template-name">Şablon adı</label><input id="caption-template-name" type="text" maxlength="60" placeholder="Şablon adı, ör. Kampanya" disabled /><button type="button" id="save-caption-template" class="button button-primary caption-template-save" disabled>Açıklamayı kaydet</button></div>
+                  <small class="caption-template-note">Şablonlar seçili hesaba özeldir ve diğer cihazlarında görünür. Seçtiğin şablonu düzenleyip aynı adla kaydedebilirsin.</small>
+                </section>
                 <label class="rights-check"><input type="checkbox" id="rights-confirm" /><span>Bu videoları paylaşma hakkım var veya izin aldım.</span></label>
                 <button class="button button-primary button-wide" type="submit" id="add-submit">${icon('plus', 18)} Kuyruğa ekle <span class="button-arrow">→</span></button>
               </form>
-              <div class="privacy-note">${icon('check', 15)} URL’ler başarıyla kuyruğa eklenince temizlenir; açıklama taslağın sonraki eklemelerde kalır ve bu cihazda saklanır. Instagram parolan burada istenmez.</div>
+              <div class="privacy-note">${icon('check', 15)} URL’ler başarıyla kuyruğa eklenince temizlenir; açıklama taslağın bu cihazda, kayıtlı şablonların hesabında bulutta saklanır. Instagram parolan burada istenmez.</div>
             </article>
             <article class="panel worker-panel" id="settings-section">
               <div class="panel-heading"><div><span class="eyebrow">YAYIN DURUMU</span><h2>Bulut bağlantıları</h2></div><span class="connection-orb ${PUBLISHER_SETUP_READY ? 'is-ready' : ''}"><i></i></span></div>
@@ -223,6 +240,7 @@ function renderShell() {
   updateStats();
   renderQueue();
   renderInstagramAccount();
+  renderCaptionTemplates();
   consumeInstagramCallback();
   const input = document.querySelector('#reel-input');
   input?.addEventListener('input', () => updateInputCounter(input.value));
@@ -343,15 +361,23 @@ async function loadQueue(silent = false) {
 async function loadInstagramAccount() {
   if (!state.session) return;
   const userId = state.session.user.id;
+  const previousAccountId = state.instagram?.id || '';
   const generation = ++instagramAccountLoadGeneration;
   const { data, error } = await supabase.from('instagram_accounts')
     .select('id,instagram_user_id,username,token_expires_at,connected_at,publish_interval_minutes,last_published_at,last_processed_at,last_media_sync_at,disconnected_at')
     .eq('user_id', userId).order('connected_at', { ascending: false }).limit(50);
   if (generation !== instagramAccountLoadGeneration || state.session?.user?.id !== userId) return;
   if (error) {
+    if (state.instagram) saveReelDraft();
     state.instagram = null;
     state.instagramAccounts = [];
+    state.captionTemplates = [];
+    state.captionTemplatesLoading = false;
+    state.captionTemplatesError = '';
+    state.selectedCaptionTemplateId = '';
+    captionTemplateLoadGeneration++;
     renderInstagramAccount();
+    renderCaptionTemplates();
     renderQueue();
     toast('Instagram bağlantı durumu alınamadı. Sayfayı yenileyip tekrar dene.', 'error');
     return;
@@ -360,11 +386,151 @@ async function loadInstagramAccount() {
   const key = activeInstagramStorageKey();
   let savedAccountId = '';
   try { savedAccountId = key ? localStorage.getItem(key) || '' : ''; } catch { /* Device storage may be restricted. */ }
-  state.instagram = selectInstagramAccount(state.instagramAccounts, savedAccountId, state.preferNewestInstagramAccount);
+  const selectedAccount = selectInstagramAccount(state.instagramAccounts, savedAccountId, state.preferNewestInstagramAccount);
+  if (previousAccountId && previousAccountId !== selectedAccount?.id) saveReelDraft();
+  state.instagram = selectedAccount;
   state.preferNewestInstagramAccount = false;
   if (state.instagram) saveActiveInstagramSelection(state.instagram.id);
+  if (previousAccountId !== state.instagram?.id) {
+    restoreReelDraft();
+    void loadCaptionTemplates();
+  }
   renderInstagramAccount();
+  renderCaptionTemplates();
   renderQueue();
+}
+
+async function loadCaptionTemplates() {
+  const userId = state.session?.user?.id;
+  const accountId = state.instagram?.id;
+  const generation = ++captionTemplateLoadGeneration;
+  state.captionTemplates = [];
+  state.captionTemplatesError = '';
+  state.selectedCaptionTemplateId = '';
+  state.captionTemplatesLoading = Boolean(userId && accountId);
+  renderCaptionTemplates();
+  if (!userId || !accountId) return;
+
+  const { data, error } = await supabase.from('instagram_caption_templates')
+    .select('id,name,caption,updated_at')
+    .eq('user_id', userId)
+    .eq('instagram_account_id', accountId)
+    .order('updated_at', { ascending: false })
+    .limit(100);
+  if (generation !== captionTemplateLoadGeneration || state.session?.user?.id !== userId || state.instagram?.id !== accountId) return;
+  state.captionTemplatesLoading = false;
+  state.captionTemplatesError = error ? 'Şablonlar yüklenemedi. Sayfayı yenileyip tekrar dene.' : '';
+  state.captionTemplates = Array.isArray(data) ? data : [];
+  renderCaptionTemplates();
+}
+
+function renderCaptionTemplates() {
+  const select = document.querySelector('#caption-template-select');
+  if (!select) return;
+  const hasAccount = Boolean(state.instagram?.id);
+  const options = state.captionTemplates.map((template) => `<option value="${escapeHtml(template.id)}">${escapeHtml(template.name)}</option>`).join('');
+  const placeholder = state.captionTemplatesLoading ? 'Şablonlar yükleniyor…' : state.captionTemplates.length ? 'Bir şablon seç…' : 'Henüz kayıtlı şablon yok';
+  select.innerHTML = `<option value="">${placeholder}</option>${options}`;
+  select.disabled = !hasAccount || state.captionTemplatesLoading || !state.captionTemplates.length;
+  if (state.captionTemplates.some((template) => template.id === state.selectedCaptionTemplateId)) select.value = state.selectedCaptionTemplateId;
+  else state.selectedCaptionTemplateId = '';
+
+  const nameInput = document.querySelector('#caption-template-name');
+  const saveButton = document.querySelector('#save-caption-template');
+  const deleteButton = document.querySelector('#delete-caption-template');
+  if (nameInput) nameInput.disabled = !hasAccount || state.captionTemplatesLoading;
+  if (saveButton) saveButton.disabled = !hasAccount || state.captionTemplatesLoading;
+  if (deleteButton) deleteButton.disabled = !hasAccount || state.captionTemplatesLoading || !state.selectedCaptionTemplateId;
+
+  const status = document.querySelector('#caption-template-status');
+  if (!status) return;
+  status.textContent = !hasAccount
+    ? 'Önce bir Instagram hesabı bağla.'
+    : state.captionTemplatesLoading
+      ? 'Bu hesabın şablonları buluttan yükleniyor…'
+      : state.captionTemplatesError
+        ? state.captionTemplatesError
+        : state.captionTemplates.length
+          ? `@${state.instagram.username} için ${state.captionTemplates.length} şablon hazır.`
+          : `@${state.instagram.username} için henüz şablon yok.`;
+  status.dataset.state = state.captionTemplatesError ? 'error' : 'info';
+}
+
+async function saveCaptionTemplate() {
+  const accountId = state.instagram?.id;
+  const accountUsername = state.instagram?.username || '';
+  const userId = state.session?.user?.id;
+  const nameInput = document.querySelector('#caption-template-name');
+  const captionInput = document.querySelector('#caption-input');
+  const button = document.querySelector('#save-caption-template');
+  if (!accountId || !userId || !nameInput || !captionInput) {
+    toast('Önce şablonu kullanacağın Instagram hesabını seç.', 'warn');
+    return;
+  }
+  const valid = validateCaptionTemplate(nameInput.value, captionInput.value);
+  if (!valid.ok) {
+    const messages = {
+      name_required: 'Şablonu kaydetmek için bir ad yaz.',
+      name_too_long: 'Şablon adı en fazla 60 karakter olabilir.',
+      caption_required: 'Önce paylaşım açıklamasını yaz.',
+      caption_too_long: 'Açıklama en fazla 2200 karakter olabilir.',
+    };
+    toast(messages[valid.reason] || 'Şablon bilgilerini kontrol et.', 'warn');
+    if (valid.reason.startsWith('name_')) nameInput.focus();
+    else captionInput.focus();
+    return;
+  }
+
+  const existing = state.captionTemplates.find((template) => template.name.toLocaleLowerCase('tr-TR') === valid.name.toLocaleLowerCase('tr-TR'));
+  if (button) { button.disabled = true; button.textContent = 'Kaydediliyor…'; }
+  const query = existing
+    ? supabase.from('instagram_caption_templates').update({ name: valid.name, caption: valid.caption, updated_at: new Date().toISOString() }).eq('id', existing.id).eq('user_id', userId).eq('instagram_account_id', accountId)
+    : supabase.from('instagram_caption_templates').insert({ user_id: userId, instagram_account_id: accountId, name: valid.name, caption: valid.caption });
+  const { data, error } = await query.select('id,name,caption,updated_at').single();
+  if (button) button.textContent = 'Açıklamayı kaydet';
+  renderCaptionTemplates();
+  if (state.session?.user?.id !== userId || state.instagram?.id !== accountId) {
+    if (!error && data) toast(`Şablon @${accountUsername} hesabına kaydedildi.`, 'success');
+    return;
+  }
+  if (error || !data) {
+    toast(error?.code === '23505' ? 'Bu isimde bir şablon zaten var; mevcut şablon adını kullan.' : 'Şablon kaydedilemedi. Bağlantını kontrol edip tekrar dene.', 'error');
+    return;
+  }
+  state.captionTemplates = [data, ...state.captionTemplates.filter((template) => template.id !== data.id)]
+    .sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')));
+  state.selectedCaptionTemplateId = data.id;
+  nameInput.value = '';
+  saveReelDraft();
+  renderCaptionTemplates();
+  toast(existing ? 'Açıklama şablonu güncellendi.' : 'Açıklama şablonu kaydedildi; diğer cihazlarında da görünür.', 'success');
+}
+
+async function deleteCaptionTemplate() {
+  const accountId = state.instagram?.id;
+  const accountUsername = state.instagram?.username || '';
+  const userId = state.session?.user?.id;
+  const templateId = state.selectedCaptionTemplateId;
+  const template = state.captionTemplates.find((item) => item.id === templateId);
+  if (!accountId || !userId || !template) return;
+  const button = document.querySelector('#delete-caption-template');
+  if (button) { button.disabled = true; button.textContent = 'Siliniyor…'; }
+  const { error } = await supabase.from('instagram_caption_templates').delete()
+    .eq('id', templateId).eq('user_id', userId).eq('instagram_account_id', accountId);
+  if (button) button.textContent = 'Seçileni sil';
+  if (state.session?.user?.id !== userId || state.instagram?.id !== accountId) {
+    if (!error) toast(`Şablon @${accountUsername} hesabından silindi.`, 'success');
+    return;
+  }
+  if (error) {
+    toast('Şablon silinemedi. Tekrar dene.', 'error');
+    renderCaptionTemplates();
+    return;
+  }
+  state.captionTemplates = state.captionTemplates.filter((item) => item.id !== templateId);
+  state.selectedCaptionTemplateId = '';
+  renderCaptionTemplates();
+  toast('Şablon silindi. Açıklama alanındaki metin korundu.', 'success');
 }
 
 function renderInstagramAccount() {
@@ -508,6 +674,7 @@ async function disconnectInstagram() {
   const button = document.querySelector('#instagram-disconnect-button');
   const accountId = state.instagram?.id;
   if (!accountId) return;
+  saveReelDraft();
   if (button) { button.disabled = true; button.textContent = 'Kaldırılıyor…'; }
   const { data, error } = await supabase.functions.invoke('instagram-disconnect', { body: { account_id: accountId } });
   if (error || data?.error) {
@@ -649,6 +816,14 @@ async function handleClick(event) {
     setTimeout(() => button.classList.remove('is-spinning'), 500);
     return;
   }
+  if (button.id === 'save-caption-template') {
+    await saveCaptionTemplate();
+    return;
+  }
+  if (button.id === 'delete-caption-template') {
+    await deleteCaptionTemplate();
+    return;
+  }
   if (button.id === 'paste-button') {
     try {
       const text = await navigator.clipboard.readText();
@@ -687,8 +862,11 @@ async function handleClick(event) {
   if (button.dataset.action === 'switch-account') {
     const selected = state.instagramAccounts.find((account) => account.id === button.dataset.accountId && !account.disconnected_at);
     if (!selected || selected.id === state.instagram?.id) return;
+    saveReelDraft();
     state.instagram = selected;
     saveActiveInstagramSelection(selected.id);
+    restoreReelDraft();
+    void loadCaptionTemplates();
     renderInstagramAccount();
     renderQueue();
     toast(`Yayın hesabı @${selected.username} olarak değiştirildi.`, 'success');
@@ -792,11 +970,34 @@ root.addEventListener('input', (event) => {
   if (event.target.id === 'reel-input' || event.target.id === 'caption-input') saveReelDraft();
 });
 root.addEventListener('change', async (event) => {
+  if (event.target.id === 'caption-template-select') {
+    const template = state.captionTemplates.find((item) => item.id === event.target.value);
+    if (!template) {
+      state.selectedCaptionTemplateId = '';
+      const nameInput = document.querySelector('#caption-template-name');
+      if (nameInput) nameInput.value = '';
+      renderCaptionTemplates();
+      return;
+    }
+    state.selectedCaptionTemplateId = template.id;
+    const nameInput = document.querySelector('#caption-template-name');
+    if (nameInput) nameInput.value = template.name;
+    const captionInput = document.querySelector('#caption-input');
+    if (captionInput) {
+      captionInput.value = template.caption;
+      saveReelDraft();
+    }
+    renderCaptionTemplates();
+    toast(`“${template.name}” açıklaması seçildi.`, 'success');
+  }
   if (event.target.id === 'instagram-account-select') {
     const selected = state.instagramAccounts.find((account) => account.id === event.target.value && !account.disconnected_at);
     if (!selected) return;
+    saveReelDraft();
     state.instagram = selected;
     saveActiveInstagramSelection(selected.id);
+    restoreReelDraft();
+    void loadCaptionTemplates();
     renderInstagramAccount();
     renderQueue();
     toast(`Yeni Reels @${selected.username} hesabına kuyruğa girer. Mevcut Reels’in hedefi değişmedi.`, 'success');
@@ -812,10 +1013,20 @@ supabase.auth.onAuthStateChange((event, session) => {
       state.rows = [];
       state.instagram = null;
       state.instagramAccounts = [];
+      state.captionTemplates = [];
+      state.captionTemplatesLoading = false;
+      state.captionTemplatesError = '';
+      state.selectedCaptionTemplateId = '';
+      captionTemplateLoadGeneration++;
     }
     state.session = session;
     if (event === 'TOKEN_REFRESHED' && sameUser) return;
     state.instagram = null;
+    state.captionTemplates = [];
+    state.captionTemplatesLoading = false;
+    state.captionTemplatesError = '';
+    state.selectedCaptionTemplateId = '';
+    captionTemplateLoadGeneration++;
     renderShell();
     loadInstagramAccount();
     loadQueue();
@@ -824,6 +1035,11 @@ supabase.auth.onAuthStateChange((event, session) => {
     state.rows = [];
     state.instagram = null;
     state.instagramAccounts = [];
+    state.captionTemplates = [];
+    state.captionTemplatesLoading = false;
+    state.captionTemplatesError = '';
+    state.selectedCaptionTemplateId = '';
+    captionTemplateLoadGeneration++;
     renderLogin();
   }
 });
