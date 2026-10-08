@@ -327,8 +327,8 @@ function renderReelTargetAssignments() {
   state.reelCaptionTemplateSelections = pruneReelCaptionTemplateSelections(items, state.reelCaptionTemplateSelections);
   state.reelCoverImageSelections = pruneReelCoverImageSelections(items, state.reelCoverImageSelections);
   if (!items.length) {
-    panel.hidden = true;
-    panel.innerHTML = '';
+    panel.hidden = false;
+    panel.innerHTML = '<div class="reel-target-heading"><strong>URL başına kapak seçimi</strong><small>Reel ekleme alanına geçerli Instagram URL’si yapıştırınca her bağlantının altında “Reels kapağı” menüsü görünür. Bir kapak seçebilir veya otomatik rastgele seçime bırakabilirsin.</small></div>';
     return;
   }
 

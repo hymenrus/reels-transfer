@@ -7,7 +7,7 @@ const source = await readFile(new URL('../public/sw.js', import.meta.url), 'utf8
 test('service worker installs a fresh app shell and bypasses HTTP cache on navigation', () => {
   assert.match(source, /fetch\('\.\/',\s*\{\s*cache:\s*'reload'\s*\}\)/);
   assert.match(source, /fetch\(request\.url,\s*\{\s*cache:\s*'no-store',\s*credentials:\s*'same-origin'\s*\}\)/);
-  assert.match(source, /reelflow-static-v13/);
+  assert.match(source, /reelflow-static-v14/);
   assert.doesNotMatch(source, /assets\/abstract-purple-blue\.jpg/);
 });
 
