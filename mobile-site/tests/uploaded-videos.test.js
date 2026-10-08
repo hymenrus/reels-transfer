@@ -13,6 +13,7 @@ const schema = await readFile(new URL('../supabase/schema.sql', import.meta.url)
 const app = await readFile(new URL('../src/main.js', import.meta.url), 'utf8');
 const worker = await readFile(new URL('../../reels_transfer/github_worker.py', import.meta.url), 'utf8');
 const workflow = await readFile(new URL('../../.github/workflows/process-reels.yml', import.meta.url), 'utf8');
+const workerTrigger = await readFile(new URL('../supabase/functions/publish-now-trigger/index.ts', import.meta.url), 'utf8');
 
  test('normalizes Instagram Reel URLs and keeps private archive size helpers', () => {
   assert.equal(MAX_ORIGINAL_VIDEO_BYTES, 50 * 1024 * 1024);
@@ -58,6 +59,8 @@ test('PWA archives pasted Reel URLs and shows worker progress/retry without a fi
   assert.match(app, /id="video-import-urls"/);
   assert.match(app, /p_source_url: item\.url/);
   assert.match(app, /p_expected_user_id: userId/);
+  assert.match(app, /video_import_id: addedImportIds\[0\]/);
+  assert.match(app, /supabase\.functions\.invoke\('publish-now-trigger'/);
   assert.match(app, /authUserGeneration !== userGeneration/);
   assert.match(app, /state\.uploadedVideos\.some\(\(item\) => item\.id === videoId/);
   assert.match(app, /retry_video_import/);
@@ -78,6 +81,10 @@ test('scheduled worker downloads accessible Instagram Reels into the private own
   assert.match(worker, /finish_video_import/);
   assert.match(worker, /fail_video_import/);
   assert.match(worker, /reelflow-original-videos/);
-  assert.match(workflow, /MAX_VIDEO_IMPORTS_PER_RUN: '1'/);
-  assert.match(workflow, /one queued Reel and one archive URL/);
+  assert.match(workflow, /max_video_imports:[\s\S]*options: \['1', '3'\]/);
+  assert.match(workflow, /MAX_VIDEO_IMPORTS_PER_RUN:.*inputs\.max_video_imports/);
+  assert.match(workflow, /'1'\s*\}\}/);
+  assert.match(workerTrigger, /video_import_id/);
+  assert.match(workerTrigger, /from\("video_import_jobs"\)[\s\S]*eq\("user_id", user\.id\)/);
+  assert.match(workerTrigger, /max_video_imports: "3"/);
 });

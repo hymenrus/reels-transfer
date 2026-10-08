@@ -731,6 +731,7 @@ async function enqueueVideoImports(form) {
   state.videoImportBusy = true;
   if (button) { button.disabled = true; button.textContent = 'Buluta gönderiliyor…'; }
   let added = 0;
+  const addedImportIds = [];
   let duplicate = parsed.duplicates;
   let failed = parsed.invalid.length;
   for (const item of parsed.items) {
@@ -752,11 +753,25 @@ async function enqueueVideoImports(form) {
       else failed += 1;
     } else if (data) {
       added += 1;
+      if (typeof data === 'string') addedImportIds.push(data);
     } else {
       duplicate += 1;
     }
   }
   if (authUserGeneration !== userGeneration || state.session?.user?.id !== userId) return;
+  let workerTriggered = false;
+  if (addedImportIds.length) {
+    if (button) button.textContent = 'Bulut işçisi başlatılıyor…';
+    try {
+      const { data: triggerData, error: triggerError } = await supabase.functions.invoke('publish-now-trigger', {
+        body: { video_import_id: addedImportIds[0] },
+      });
+      workerTriggered = !triggerError && !triggerData?.error;
+    } catch {
+      workerTriggered = false;
+    }
+    if (authUserGeneration !== userGeneration || state.session?.user?.id !== userId) return;
+  }
   state.videoImportBusy = false;
   if (button) { button.disabled = false; button.innerHTML = `${icon('plus', 17)} Buluta kaydet`; }
   if (failed === 0) {
@@ -766,6 +781,7 @@ async function enqueueVideoImports(form) {
   await loadUploadedVideos(true);
   const parts = [];
   if (added) parts.push(`${added} Reel bulut indirme kuyruğuna eklendi`);
+  if (added) parts.push(workerTriggered ? 'Bulut işçisi şimdi tetiklendi' : 'Otomatik işçi turunda indirilecek');
   if (duplicate) parts.push(`${duplicate} zaten arşivde veya sırada`);
   if (failed) parts.push(`${failed} bağlantı eklenemedi`);
   toast(parts.join(' · ') || 'Arşiv kuyruğu değişmedi.', failed ? 'warn' : 'success');

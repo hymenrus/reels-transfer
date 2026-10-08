@@ -31,7 +31,7 @@ Deno.serve(async (req: Request) => {
   const serviceKey = envKey("SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_SECRET_KEYS");
   const githubToken = Deno.env.get("GITHUB_WORKFLOW_TOKEN") || "";
   if (!supabaseUrl || !publishableKey || !serviceKey || !githubToken) {
-    return json({ error: "Anında yayın tetikleyicisi sunucuda yapılandırılmamış." }, 503);
+    return json({ error: "Bulut işçisi sunucuda yapılandırılmamış." }, 503);
   }
 
   const authorization = req.headers.get("authorization") || "";
@@ -44,25 +44,54 @@ Deno.serve(async (req: Request) => {
   const { data: { user }, error: authError } = await authClient.auth.getUser();
   if (authError || !user) return json({ error: "Oturum doğrulanamadı; tekrar giriş yap." }, 401);
 
-  const payload = await req.json().catch(() => ({})) as { reel_id?: unknown };
+  const payload = await req.json().catch(() => ({})) as { reel_id?: unknown; video_import_id?: unknown };
   const reelId = typeof payload.reel_id === "string" ? payload.reel_id.trim() : "";
-  if (!uuidPattern.test(reelId)) return json({ error: "Reel kimliği geçersiz." }, 400);
+  const videoImportId = typeof payload.video_import_id === "string" ? payload.video_import_id.trim() : "";
+  const isReelTrigger = Boolean(reelId) && !videoImportId && uuidPattern.test(reelId);
+  const isImportTrigger = Boolean(videoImportId) && !reelId && uuidPattern.test(videoImportId);
+  if (!isReelTrigger && !isImportTrigger) return json({ error: "İş tetikleme kimliği geçersiz." }, 400);
 
   const admin = createClient(supabaseUrl, serviceKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
-  const { data: pending, error: queueError } = await admin
-    .from("reels_queue")
-    .select("id")
-    .eq("id", reelId)
-    .eq("user_id", user.id)
-    .eq("status", "queued")
-    .eq("publish_now", true)
-    .eq("rights_confirmed", true)
-    .limit(1)
-    .maybeSingle();
-  if (queueError) return json({ error: "Hemen paylaş isteği doğrulanamadı." }, 503);
-  if (!pending) return json({ error: "Bekleyen hemen paylaş isteği bulunamadı." }, 409);
+  let pending: { id: string; status?: string } | null = null;
+  let queueError: { message: string } | null = null;
+  if (isReelTrigger) {
+    const result = await admin
+      .from("reels_queue")
+      .select("id")
+      .eq("id", reelId)
+      .eq("user_id", user.id)
+      .eq("status", "queued")
+      .eq("publish_now", true)
+      .eq("rights_confirmed", true)
+      .limit(1)
+      .maybeSingle();
+    pending = result.data;
+    queueError = result.error;
+  } else {
+    const result = await admin
+      .from("video_import_jobs")
+      .select("id,status")
+      .eq("id", videoImportId)
+      .eq("user_id", user.id)
+      .in("status", ["queued", "processing", "ready"])
+      .limit(1)
+      .maybeSingle();
+    pending = result.data;
+    queueError = result.error;
+  }
+  if (queueError) return json({ error: "İş isteği doğrulanamadı." }, 503);
+  if (!pending) return json({ error: "Bu hesaba ait bekleyen iş bulunamadı." }, 409);
+  if (isImportTrigger && pending.status !== "queued") {
+    const { count, error: pendingImportsError } = await admin
+      .from("video_import_jobs")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", user.id)
+      .eq("status", "queued");
+    if (pendingImportsError) return json({ error: "Bulut arşiv kuyruğu denetlenemedi." }, 503);
+    if (!count) return json({ ok: true, already_started: true });
+  }
 
   try {
     const response = await fetch(
@@ -75,7 +104,12 @@ Deno.serve(async (req: Request) => {
           "X-GitHub-Api-Version": "2022-11-28",
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ ref: "main", inputs: { target_reel_id: pending.id } }),
+        body: JSON.stringify({
+          ref: "main",
+          inputs: isReelTrigger
+            ? { target_reel_id: pending.id }
+            : { max_video_imports: "3" },
+        }),
       },
     );
     if (response.status !== 204) {
@@ -86,14 +120,16 @@ Deno.serve(async (req: Request) => {
       return json({ error: "Bulut işçisine ulaşılamadı." }, 502);
   }
 
-  const { error: stageError } = await admin
-    .from("reels_queue")
-    .update({ stage: "Hemen paylaşım tetiklendi", updated_at: new Date().toISOString() })
-    .eq("id", pending.id)
-    .eq("user_id", user.id)
-    .eq("status", "queued")
-    .eq("publish_now", true);
-  if (stageError) console.error("Workflow dispatched but queue stage update failed.");
+  if (isReelTrigger) {
+    const { error: stageError } = await admin
+      .from("reels_queue")
+      .update({ stage: "Hemen paylaşım tetiklendi", updated_at: new Date().toISOString() })
+      .eq("id", pending.id)
+      .eq("user_id", user.id)
+      .eq("status", "queued")
+      .eq("publish_now", true);
+    if (stageError) console.error("Workflow dispatched but queue stage update failed.");
+  }
 
-  return json({ ok: true });
+  return json({ ok: true, dispatched: true });
 });
