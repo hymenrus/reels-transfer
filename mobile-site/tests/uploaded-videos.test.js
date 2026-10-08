@@ -12,6 +12,8 @@ const hardeningMigration = await readFile(new URL('../supabase/migrations/202610
 const coverQuotaMigration = await readFile(new URL('../supabase/migrations/202610080010_storage_quota_and_reel_covers.sql', import.meta.url), 'utf8');
 const coverPolicyFixMigration = await readFile(new URL('../supabase/migrations/202610080011_fix_cover_storage_path_policy.sql', import.meta.url), 'utf8');
 const perReelCoverMigration = await readFile(new URL('../supabase/migrations/202610080012_per_reel_cover_assignments.sql', import.meta.url), 'utf8');
+const balancedRandomCoverMigration = await readFile(new URL('../supabase/migrations/202610080013_balanced_random_cover_selection.sql', import.meta.url), 'utf8');
+const coverSelectionBackfillMigration = await readFile(new URL('../supabase/migrations/202610080014_backfill_cover_selection_counts.sql', import.meta.url), 'utf8');
 const schema = await readFile(new URL('../supabase/schema.sql', import.meta.url), 'utf8');
 const app = await readFile(new URL('../src/main.js', import.meta.url), 'utf8');
 const worker = await readFile(new URL('../../reels_transfer/github_worker.py', import.meta.url), 'utf8');
@@ -96,6 +98,13 @@ test('migrations keep originals private and add owner-isolated, retryable URL im
   assert.match(perReelCoverMigration, /CREATE OR REPLACE FUNCTION public\.enqueue_reel_with_cover/);
   assert.match(perReelCoverMigration, /c\.user_id = v_user_id[\s\S]*FOR UPDATE/);
   assert.match(perReelCoverMigration, /GRANT EXECUTE ON FUNCTION public\.enqueue_reel_with_cover/);
+  assert.match(balancedRandomCoverMigration, /ADD COLUMN IF NOT EXISTS selection_count bigint NOT NULL DEFAULT 0/);
+  assert.match(balancedRandomCoverMigration, /pg_advisory_xact_lock[\s\S]*hashtextextended\(v_user_id::text, 0\)/);
+  assert.match(balancedRandomCoverMigration, /ORDER BY c\.selection_count ASC, pg_catalog\.random\(\)/);
+  assert.match(balancedRandomCoverMigration, /CREATE OR REPLACE FUNCTION public\.enqueue_reel_with_auto_cover/);
+  assert.match(balancedRandomCoverMigration, /GRANT EXECUTE ON FUNCTION public\.enqueue_reel_with_auto_cover/);
+  assert.match(coverSelectionBackfillMigration, /SELECT q\.cover_image_id, count\(\*\)::bigint AS selection_count/);
+  assert.match(coverSelectionBackfillMigration, /history\.selection_count > c\.selection_count/);
   assert.match(schema, /CREATE TABLE IF NOT EXISTS public\.video_import_jobs/);
   assert.match(schema, /45 minutes/);
 });
@@ -137,6 +146,7 @@ test('PWA queues URL-only archive imports and supports local bulk TXT lists', ()
   assert.match(app, /data-video-cover-select/);
   assert.match(app, /Her Reel için hesap, açıklama ve kapak/);
   assert.match(app, /data-reel-cover-select data-shortcode-key=/);
+  assert.match(app, /p_auto_select_cover: !state\.reelCoverImageSelections\[item\.shortcodeKey\]/);
   assert.match(app, /reelCoverImageSelections/);
   assert.match(app, /enqueue_uploaded_video_with_cover/);
   assert.match(app, /p_cover_image_id:/);

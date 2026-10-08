@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, PUBLISHER_SETUP_READY } from './config.js';
-import { estimateQueueEta, NO_REEL_COVER_IMAGE, pruneReelAccountTargets, pruneReelCaptionTemplateSelections, pruneReelCoverImageSelections, resolveReelCoverAssignments, resolveReelTargetAssignments, selectInstagramAccount, setReelAccountTarget, setReelCoverImageSelection } from './queue-utils.js';
+import { estimateQueueEta, NO_REEL_COVER_IMAGE, pruneReelAccountTargets, pruneReelCaptionTemplateSelections, pruneReelCoverImageSelections, resolveReelTargetAssignments, selectInstagramAccount, setReelAccountTarget, setReelCoverImageSelection } from './queue-utils.js';
 import { captionForAccount, captionForReelUrl, hasReelDraftContent, setCaptionForAccount, setTagsForAccount, tagsForAccount, validateCaptionTemplate } from './caption-utils.js';
 import { parseReelLines } from './url-utils.js';
 import { formatVideoFileSize, mapWithConcurrency, MAX_VIDEO_IMPORTS_PER_BATCH, VIDEO_IMPORT_CONCURRENCY, VIDEO_STORAGE_BUCKET, VIDEO_COVER_BUCKET, MAX_COVER_IMAGES_PER_BATCH, coverImageStoragePath, createCoverImageId, validateCoverImageFile } from './uploaded-video-utils.js';
@@ -377,7 +377,7 @@ function renderReelTargetAssignments() {
   const coverAction = state.videoCoverImages.length
     ? `${state.videoCoverImages.length} kayıtlı kapak`
     : '<a href="#video-library-section">Arşive kapak yükle →</a>';
-  panel.innerHTML = `<div class="reel-target-heading"><strong>Her Reel için hesap, açıklama ve kapak</strong><small>Her URL’ye ayrı hesap ve açıklama seçebilirsin. Kapak seçmezsen arşivindeki JPEG kapaklardan rastgele atanır; istersen URL’ye özel kapak seç veya videonun karesini kullan. Kapak görselleri kütüphanede saklanır; ${coverAction}. “Genel açıklama” seçiliyse üstteki ortak açıklama uygulanır.</small></div><div class="reel-target-list">${rows}</div>`;
+  panel.innerHTML = `<div class="reel-target-heading"><strong>Her Reel için hesap, açıklama ve kapak</strong><small>Her URL’ye ayrı hesap ve açıklama seçebilirsin. Kapak seçmezsen arşivindeki az kullanılmış JPEG’lerden rastgele atanır; tüm kapaklar sırayla kullanılmadan aynı kapak tekrar seçilmez. İstersen URL’ye özel kapak seç veya videonun karesini kullan. Kapak görselleri kütüphanede saklanır; ${coverAction}. “Genel açıklama” seçiliyse üstteki ortak açıklama uygulanır.</small></div><div class="reel-target-list">${rows}</div>`;
 }
 function updateStats() {
   const counts = { total: state.rows.length, queued: 0, published: 0, failed: 0 };
@@ -1608,25 +1608,16 @@ async function addToQueue(form) {
     renderReelTargetAssignments();
     return;
   }
-  const coverByShortcode = resolveReelCoverAssignments(parsed.items, state.reelCoverImageSelections, state.videoCoverImages);
+  const coverByShortcode = new Map(selectedCoverEntries.map(([item, coverChoice]) => [
+    item.shortcodeKey,
+    coverChoice && coverChoice !== NO_REEL_COVER_IMAGE ? coverChoice : null,
+  ]));
   if (!rights.checked) {
     toast('Devam etmek için içerik paylaşma hakkını onayla.', 'error');
     rights.focus();
     return;
   }
-  let hasAutomaticCover = false;
-  for (const item of parsed.items) {
-    if (state.reelCoverImageSelections[item.shortcodeKey]) continue;
-    const coverId = coverByShortcode.get(item.shortcodeKey);
-    if (coverId) {
-      state.reelCoverImageSelections = setReelCoverImageSelection(state.reelCoverImageSelections, item.shortcodeKey, coverId);
-      hasAutomaticCover = true;
-    }
-  }
-  if (hasAutomaticCover) {
-    saveReelDraft();
-    renderReelTargetAssignments();
-  } else if (needsAutomaticCover && !state.videoCoverImages.length) {
+  if (needsAutomaticCover && !state.videoCoverImages.length) {
     toast('Arşivde kayıtlı kapak bulunamadı; bu Reels videonun kendi karesiyle gönderilecek.', 'warn');
   }
   const button = form.querySelector('#add-submit');
@@ -1638,13 +1629,14 @@ async function addToQueue(form) {
   let failed = parsed.invalid.length;
   const invalidSample = parsed.invalid[0]?.reason;
   for (const item of parsed.items) {
-    const { data, error } = await supabase.rpc('enqueue_reel_with_cover', {
+    const { data, error } = await supabase.rpc('enqueue_reel_with_auto_cover', {
       p_shortcode: item.shortcode,
       p_source_url: item.url,
       p_caption: captionByShortcode.get(item.shortcodeKey),
       p_rights_confirmed: true,
       p_instagram_account_id: targetByShortcode.get(item.shortcodeKey),
       p_cover_image_id: coverByShortcode.get(item.shortcodeKey),
+      p_auto_select_cover: !state.reelCoverImageSelections[item.shortcodeKey],
     });
     if (error) {
       failed++;
