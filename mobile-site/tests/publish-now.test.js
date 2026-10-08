@@ -34,3 +34,13 @@ test('successful queue add clears URLs but retains and persists the caption draf
   assert.doesNotMatch(successBranch, /(?:captionInput|caption-input)\.value\s*=\s*''/);
   assert.match(source, /const draft = \{ urls: urlInput\.value, caption: captionInput\.value \}/);
 });
+
+test('new queue submissions pin every Reel to the captured selected Instagram account', () => {
+  const start = source.indexOf('async function addToQueue(form)');
+  const end = source.indexOf('async function handleClick(event)', start);
+  const addToQueue = source.slice(start, end);
+  assert.match(addToQueue, /const targetInstagramAccountId = state\.instagram\.id/);
+  assert.match(addToQueue, /p_instagram_account_id: targetInstagramAccountId/);
+  assert.match(source, /assign_reel_account/);
+  assert.match(source, /select\('id,instagram_account_id,shortcode/);
+});

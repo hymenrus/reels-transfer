@@ -1,4 +1,4 @@
-"""GitHub Actions bulut worker'ı: her kullanıcı yalnızca kendi Instagram hesabında yayın yapar."""
+"""GitHub Actions worker: every queue item is published only to its owner-selected Instagram account."""
 from __future__ import annotations
 
 import logging
@@ -59,7 +59,7 @@ class SupabaseQueue:
 
     def queued(self, limit: int, target_job_id: str | None = None) -> list[dict[str, Any]]:
         filters = {
-            "select": "id,user_id,shortcode,source_url,caption,status,progress,attempts,rights_confirmed,publish_now,created_at",
+            "select": "id,user_id,instagram_account_id,shortcode,source_url,caption,status,progress,attempts,rights_confirmed,publish_now,created_at",
             "status": "eq.queued",
             "order": "publish_now.desc,created_at.asc",
             "limit": str(max(1, min(limit, 200))),
@@ -71,24 +71,27 @@ class SupabaseQueue:
         response = self.session.get(self.queue_url + "?" + params, timeout=30)
         return self._rows(response, "kuyruk")
 
-    def instagram_connection(self, user_id: str) -> dict[str, Any] | None:
+    def instagram_connection(self, account_id: str, user_id: str) -> dict[str, Any] | None:
         account_params = urlencode({
-            "select": "user_id,instagram_user_id,username,token_expires_at,last_processed_at,last_published_at,publish_interval_minutes",
-            "user_id": f"eq.{user_id}",
-            "limit": "1",
-        })
-        credential_params = urlencode({
-            "select": "user_id,access_token,refreshed_at",
+            "select": "id,user_id,instagram_user_id,username,token_expires_at,last_processed_at,last_published_at,publish_interval_minutes,last_media_sync_at,disconnected_at",
+            "id": f"eq.{account_id}",
             "user_id": f"eq.{user_id}",
             "limit": "1",
         })
         account_response = self.session.get(self.accounts_url + "?" + account_params, timeout=30)
         accounts = self._rows(account_response, "Instagram hesabı")
-        if not accounts:
+        if not accounts or accounts[0].get("disconnected_at"):
             return None
+        credential_params = urlencode({
+            "select": "user_id,instagram_account_id,access_token,refreshed_at",
+            "instagram_account_id": f"eq.{account_id}",
+            "user_id": f"eq.{user_id}",
+            "limit": "1",
+        })
         credential_response = self.session.get(self.credentials_url + "?" + credential_params, timeout=30)
         credentials = self._rows(credential_response, "Instagram kimlik bilgisi")
-        if not credentials or not credentials[0].get("access_token"):
+        if (not credentials or not credentials[0].get("access_token")
+                or str(credentials[0].get("user_id")) != str(accounts[0].get("user_id"))):
             return None
         return {**accounts[0], **credentials[0]}
 
@@ -97,7 +100,10 @@ class SupabaseQueue:
         if not user_id:
             raise QueueApiError("Kuyruk kaydında user_id bulunamadı.")
         fields.setdefault("updated_at", datetime.now(timezone.utc).isoformat())
-        params = urlencode({"id": f"eq.{job['id']}", "user_id": f"eq.{user_id}"})
+        filters = {"id": f"eq.{job['id']}", "user_id": f"eq.{user_id}"}
+        if job.get("instagram_account_id"):
+            filters["instagram_account_id"] = f"eq.{job['instagram_account_id']}"
+        params = urlencode(filters)
         response = self.session.patch(
             self.queue_url + "?" + params,
             json=fields,
@@ -106,9 +112,9 @@ class SupabaseQueue:
         )
         return bool(self._rows(response, "kuyruk durumu"))
 
-    def update_instagram_token(self, user_id: str, access_token: str, expires_at: str) -> None:
+    def update_instagram_token(self, account_id: str, user_id: str, access_token: str, expires_at: str) -> None:
         now = datetime.now(timezone.utc).isoformat()
-        params = urlencode({"user_id": f"eq.{user_id}"})
+        params = urlencode({"instagram_account_id": f"eq.{account_id}", "user_id": f"eq.{user_id}"})
         response = self.session.patch(
             self.credentials_url + "?" + params,
             json={"access_token": access_token, "refreshed_at": now, "updated_at": now},
@@ -117,8 +123,9 @@ class SupabaseQueue:
         )
         if not self._rows(response, "token yenileme"):
             raise QueueApiError("Instagram tokenı kaydedilemedi.")
+        account_params = urlencode({"id": f"eq.{account_id}", "user_id": f"eq.{user_id}"})
         response = self.session.patch(
-            self.accounts_url + "?" + params,
+            self.accounts_url + "?" + account_params,
             json={"token_expires_at": expires_at, "updated_at": now},
             headers={"Prefer": "return=representation"},
             timeout=30,
@@ -126,8 +133,8 @@ class SupabaseQueue:
         if not self._rows(response, "token süresi"):
             raise QueueApiError("Instagram token süresi güncellenemedi.")
 
-    def mark_processed(self, user_id: str) -> None:
-        params = urlencode({"user_id": f"eq.{user_id}"})
+    def mark_processed(self, account_id: str) -> None:
+        params = urlencode({"id": f"eq.{account_id}"})
         response = self.session.patch(
             self.accounts_url + "?" + params,
             json={"last_processed_at": datetime.now(timezone.utc).isoformat(), "updated_at": datetime.now(timezone.utc).isoformat()},
@@ -135,11 +142,11 @@ class SupabaseQueue:
             timeout=30,
         )
         if not response.ok:
-            raise QueueApiError(f"Kullanıcı kuyruk sırası güncellenemedi: HTTP {response.status_code}")
+            raise QueueApiError(f"Instagram hesap sırası güncellenemedi: HTTP {response.status_code}")
 
-    def mark_published_time(self, user_id: str) -> None:
+    def mark_published_time(self, account_id: str) -> None:
         now = datetime.now(timezone.utc).isoformat()
-        params = urlencode({"user_id": f"eq.{user_id}"})
+        params = urlencode({"id": f"eq.{account_id}"})
         response = self.session.patch(
             self.accounts_url + "?" + params,
             json={"last_published_at": now, "last_processed_at": now, "updated_at": now},
@@ -149,9 +156,10 @@ class SupabaseQueue:
         if not response.ok:
             raise QueueApiError(f"Yayın aralığı Supabase'e kaydedilemedi: HTTP {response.status_code}")
 
-    def latest_published_at(self, user_id: str) -> str | None:
+    def latest_published_at(self, account_id: str, user_id: str) -> str | None:
         params = urlencode({
             "select": "published_at,created_at",
+            "instagram_account_id": f"eq.{account_id}",
             "user_id": f"eq.{user_id}",
             "status": "eq.published",
             "order": "published_at.desc.nullslast,created_at.desc",
@@ -166,7 +174,8 @@ class SupabaseQueue:
 
     def media_sync_due_accounts(self, cutoff: datetime, limit: int) -> list[dict[str, Any]]:
         params = urlencode({
-            "select": "user_id,instagram_user_id,last_media_sync_at",
+            "select": "id,user_id,instagram_user_id,last_media_sync_at,disconnected_at",
+            "disconnected_at": "is.null",
             "order": "last_media_sync_at.asc.nullsfirst",
             "limit": "1000",
         })
@@ -178,10 +187,11 @@ class SupabaseQueue:
                 due.append(account)
         return due[:max(0, limit)]
 
-    def published_reels(self, user_id: str, instagram_user_id: str) -> list[dict[str, Any]]:
+    def published_reels(self, user_id: str, account_id: str, instagram_user_id: str) -> list[dict[str, Any]]:
         params = urlencode({
-            "select": "id,user_id,ig_media_id,published_at,created_at,published_instagram_user_id,is_deleted_on_instagram",
+            "select": "id,user_id,instagram_account_id,ig_media_id,published_at,created_at,published_instagram_user_id,is_deleted_on_instagram",
             "user_id": f"eq.{user_id}",
+            "instagram_account_id": f"eq.{account_id}",
             "status": "eq.published",
             "ig_media_id": "not.is.null",
             "published_instagram_user_id": f"eq.{instagram_user_id}",
@@ -199,9 +209,9 @@ class SupabaseQueue:
             instagram_deleted_at=None if present else datetime.now(timezone.utc).isoformat(),
         )
 
-    def mark_media_sync_attempt(self, user_id: str) -> None:
+    def mark_media_sync_attempt(self, account_id: str) -> None:
         now = datetime.now(timezone.utc).isoformat()
-        params = urlencode({"user_id": f"eq.{user_id}"})
+        params = urlencode({"id": f"eq.{account_id}"})
         response = self.session.patch(
             self.accounts_url + "?" + params,
             json={"last_media_sync_at": now, "updated_at": now},
@@ -249,17 +259,17 @@ def _active_connection(queue: SupabaseQueue, connection: dict[str, Any]) -> dict
         else:
             fresh_token, lifetime = refresh_long_lived_token(str(connection["access_token"]))
             fresh_expiry = (now + timedelta(seconds=lifetime)).isoformat()
-            queue.update_instagram_token(str(connection["user_id"]), fresh_token, fresh_expiry)
+            queue.update_instagram_token(str(connection["id"]), str(connection["user_id"]), fresh_token, fresh_expiry)
             connection = {**connection, "access_token": fresh_token, "token_expires_at": fresh_expiry, "refreshed_at": now.isoformat()}
     return connection
 
 
 def _connection_with_published_history(
-    queue: SupabaseQueue, user_id: str, connection: dict[str, Any] | None
+    queue: SupabaseQueue, connection: dict[str, Any] | None
 ) -> dict[str, Any] | None:
     if not connection or connection.get("last_published_at"):
         return connection
-    last_published_at = queue.latest_published_at(user_id)
+    last_published_at = queue.latest_published_at(str(connection["id"]), str(connection["user_id"]))
     return {**connection, "last_published_at": last_published_at} if last_published_at else connection
 
 
@@ -329,22 +339,25 @@ class PublicationProgress:
 
 
 def _sync_published_instagram_media(queue: SupabaseQueue, settings: Settings) -> tuple[int, int]:
-    """Compare locally tracked publications with each owner's Instagram media list."""
+    """Compare locally tracked publications with each connected account's media list."""
     now = datetime.now(timezone.utc)
     due_accounts = queue.media_sync_due_accounts(now - MEDIA_SYNC_INTERVAL, MAX_MEDIA_SYNC_ACCOUNTS_PER_RUN)
     removed = restored = 0
     for account in due_accounts:
+        account_id = str(account.get("id") or "")
         user_id = str(account.get("user_id") or "")
         instagram_user_id = str(account.get("instagram_user_id") or "")
-        if not user_id or not instagram_user_id:
+        if not account_id or not user_id or not instagram_user_id:
             continue
         account_removed = account_restored = 0
         try:
-            rows = queue.published_reels(user_id, instagram_user_id)
+            rows = queue.published_reels(user_id, account_id, instagram_user_id)
             if not rows:
                 continue
-            connection = queue.instagram_connection(user_id)
-            if not connection or str(connection.get("instagram_user_id") or "") != instagram_user_id:
+            connection = queue.instagram_connection(account_id, user_id)
+            if (not connection
+                    or str(connection.get("id") or "") != account_id
+                    or str(connection.get("instagram_user_id") or "") != instagram_user_id):
                 continue
             connection = _active_connection(queue, connection)
             dates = [
@@ -379,20 +392,20 @@ def _sync_published_instagram_media(queue: SupabaseQueue, settings: Settings) ->
             removed += account_removed
             restored += account_restored
             LOGGER.info(
-                "Instagram medya eşitlemesi tamamlandı: kullanıcı=%s, kontrol edilen=%d, artık bulunmayan=%d, geri gelen=%d%s",
-                user_id,
+                "Instagram medya eşitlemesi tamamlandı: hesap=%s, kontrol edilen=%d, artık bulunmayan=%d, geri gelen=%d%s",
+                account_id,
                 len(rows),
                 account_removed,
                 account_restored,
                 " (kısmi tarama)" if not coverage_complete else "",
             )
         except (InstagramApiError, QueueApiError, KeyError, TypeError, ValueError, OSError) as exc:
-            LOGGER.warning("Instagram medya eşitlemesi atlandı (kullanıcı=%s): %s", user_id, exc)
+            LOGGER.warning("Instagram medya eşitlemesi atlandı (hesap=%s): %s", account_id, exc)
         finally:
             try:
-                queue.mark_media_sync_attempt(user_id)
+                queue.mark_media_sync_attempt(account_id)
             except QueueApiError:
-                LOGGER.exception("Instagram medya eşitleme zamanı kaydedilemedi (kullanıcı=%s).", user_id)
+                LOGGER.exception("Instagram medya eşitleme zamanı kaydedilemedi (hesap=%s).", account_id)
     return removed, restored
 
 
@@ -404,7 +417,7 @@ def run_worker() -> dict[str, int]:
 
     settings = load_settings(require_account_credentials=False)
     if settings.api_mode != "instagram_login":
-        raise ConfigError("Kullanıcı başına Instagram bağlantısı için IG_API_MODE=instagram_login olmalı.")
+        raise ConfigError("Kullanıcıya ait Instagram hesaplarını yayınlamak için IG_API_MODE=instagram_login olmalı.")
     ensure_tools_available()
     if settings.max_posts_per_run <= 0:
         LOGGER.info("MAX_POSTS_PER_RUN sıfır; worker bu turda yayın yapmayacak.")
@@ -423,19 +436,19 @@ def run_worker() -> dict[str, int]:
     )
     connections: dict[str, dict[str, Any] | None] = {}
     for job in jobs:
-        user_id = str(job.get("user_id") or "")
-        if user_id and user_id not in connections:
-            connection = queue.instagram_connection(user_id)
-            connections[user_id] = _connection_with_published_history(queue, user_id, connection)
+        account_id = str(job.get("instagram_account_id") or "")
+        if account_id and account_id not in connections:
+            connection = queue.instagram_connection(account_id, str(job.get("user_id") or ""))
+            connections[account_id] = _connection_with_published_history(queue, connection)
 
     def fairness_key(job: dict[str, Any]) -> tuple[bool, datetime, datetime]:
-        connection = connections.get(str(job.get("user_id") or ""))
+        connection = connections.get(str(job.get("instagram_account_id") or ""))
         last = _parse_time(connection.get("last_processed_at")) if connection else datetime.min.replace(tzinfo=timezone.utc)
         return job.get("publish_now") is not True, last, _parse_time(job.get("created_at"))
 
     jobs.sort(key=fairness_key)
     published = failed = skipped = claimed = 0
-    LOGGER.info("Bulut işçisi %d kullanıcıya ait kuyruk kaydı buldu.", len(jobs))
+    LOGGER.info("Bulut işçisi %d kuyruk kaydı buldu.", len(jobs))
 
     for job in jobs:
         if claimed >= settings.max_posts_per_run:
@@ -448,9 +461,14 @@ def run_worker() -> dict[str, int]:
             _mark_failed(queue, job, "İçerik paylaşma hakkı onayı eksik.")
             failed += 1
             continue
-        connection = connections.get(user_id)
+        account_id = str(job.get("instagram_account_id") or "")
+        if not account_id:
+            _mark_failed(queue, job, "Bu Reel için yayınlanacağı Instagram hesabını ReelFlow panelinde seç.")
+            failed += 1
+            continue
+        connection = connections.get(account_id)
         if not connection:
-            _mark_failed(queue, job, "Instagram hesabı bağlı değil. ReelFlow'da Instagram hesabını bağlayıp yeniden dene.")
+            _mark_failed(queue, job, "Bu Reel'in hedef Instagram hesabı bağlı değil. Yeniden bağla veya ReelFlow'da açıkça başka hedef seç.")
             failed += 1
             continue
         try:
@@ -485,9 +503,9 @@ def run_worker() -> dict[str, int]:
         source_file: Path | None = None
         reel_file: Path | None = None
         try:
-            queue.mark_processed(user_id)
+            queue.mark_processed(account_id)
             connection = _active_connection(queue, connection)
-            connections[user_id] = connection
+            connections[account_id] = connection
             publisher = _publisher(settings, str(connection["access_token"]), str(connection["instagram_user_id"]))
             if publisher.remaining_quota() <= 0:
                 queue.update(
@@ -514,13 +532,13 @@ def run_worker() -> dict[str, int]:
             )
             published += 1
             connection = {**connection, "last_published_at": datetime.now(timezone.utc).isoformat()}
-            connections[user_id] = connection
+            connections[account_id] = connection
             try:
                 saved = queue.finish_publication(user_id, str(job["id"]), media_id)
             except QueueApiError:
                 LOGGER.exception("Instagram yayınlandı fakat kuyruk durumu eşitlenemedi (%s).", job["shortcode"])
                 try:
-                    queue.mark_published_time(user_id)
+                    queue.mark_published_time(account_id)
                 except QueueApiError:
                     LOGGER.exception("Yayın aralığı fallback olarak da yazılamadı (%s).", job["shortcode"])
                 try:
@@ -532,7 +550,7 @@ def run_worker() -> dict[str, int]:
             if not saved:
                 LOGGER.error("Instagram yayınlandı fakat queue RPC processing satırını bulamadı (%s).", job["shortcode"])
                 try:
-                    queue.mark_published_time(user_id)
+                    queue.mark_published_time(account_id)
                 except QueueApiError:
                     LOGGER.exception("Yayın aralığı fallback olarak da yazılamadı (%s).", job["shortcode"])
                 try:
@@ -541,7 +559,7 @@ def run_worker() -> dict[str, int]:
                     LOGGER.exception("Yayın sonrası uyarı durumu da yazılamadı (%s).", job["shortcode"])
                 skipped += 1
                 continue
-            LOGGER.info("Reel kullanıcı hesabında yayınlandı: %s", job["shortcode"])
+            LOGGER.info("Reel Instagram hesabında yayınlandı: %s", job["shortcode"])
         except (DownloadError, MediaError, InstagramApiError, ValueError, OSError, QueueApiError) as exc:
             safe_error = str(exc).replace(str(connection.get("access_token", "")), "[TOKEN]")[:1000]
             _mark_failed(queue, job, safe_error)

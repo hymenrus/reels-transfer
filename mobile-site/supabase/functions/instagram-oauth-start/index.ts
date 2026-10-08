@@ -59,6 +59,7 @@ Deno.serve(async (req: Request) => {
   url.searchParams.set("response_type", "code");
   url.searchParams.set("scope", "instagram_business_basic,instagram_business_content_publish");
   url.searchParams.set("state", state);
+  url.searchParams.set("force_reauth", "true");
   url.searchParams.set("enable_fb_login", "false");
   return json({ authorization_url: url.toString(), app_site_url: appSiteUrl });
 });

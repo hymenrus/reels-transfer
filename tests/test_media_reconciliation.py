@@ -82,25 +82,33 @@ def test_media_listing_is_restricted_to_instagram_login() -> None:
 
 
 class FakeSyncQueue:
-    def __init__(self, rows: list[dict]) -> None:
+    def __init__(self, rows: list[dict], accounts: list[dict] | None = None) -> None:
         self.rows = rows
+        self.accounts = accounts or [{"id": "account-1", "user_id": "user-1", "instagram_user_id": "ig-1", "last_media_sync_at": None}]
         self.updates: list[tuple[str, bool]] = []
         self.sync_attempts: list[str] = []
 
     def media_sync_due_accounts(self, cutoff: datetime, limit: int) -> list[dict]:
-        return [{"user_id": "user-1", "instagram_user_id": "ig-1", "last_media_sync_at": None}]
+        return self.accounts[:limit]
 
-    def published_reels(self, user_id: str, instagram_user_id: str) -> list[dict]:
-        assert (user_id, instagram_user_id) == ("user-1", "ig-1")
-        return self.rows
+    def published_reels(self, user_id: str, account_id: str, instagram_user_id: str) -> list[dict]:
+        assert any(
+            account["id"] == account_id
+            and account["user_id"] == user_id
+            and account["instagram_user_id"] == instagram_user_id
+            for account in self.accounts
+        )
+        return [row for row in self.rows if row["instagram_account_id"] == account_id]
 
-    def instagram_connection(self, user_id: str) -> dict:
-        assert user_id == "user-1"
+    def instagram_connection(self, account_id: str, user_id: str) -> dict:
+        account = next(account for account in self.accounts if account["id"] == account_id)
+        assert account["user_id"] == user_id
         now = datetime.now(timezone.utc)
         return {
+            "id": account_id,
             "user_id": user_id,
-            "instagram_user_id": "ig-1",
-            "access_token": "private-token",
+            "instagram_user_id": account["instagram_user_id"],
+            "access_token": f"token-{account_id}",
             "token_expires_at": (now + timedelta(days=30)).isoformat(),
             "refreshed_at": now.isoformat(),
         }
@@ -109,15 +117,15 @@ class FakeSyncQueue:
         self.updates.append((row["id"], present))
         return True
 
-    def mark_media_sync_attempt(self, user_id: str) -> None:
-        self.sync_attempts.append(user_id)
+    def mark_media_sync_attempt(self, account_id: str) -> None:
+        self.sync_attempts.append(account_id)
 
 
 def test_partial_inventory_marks_only_missing_rows_inside_covered_window(monkeypatch) -> None:
     queue = FakeSyncQueue([
-        {"id": "missing-recent", "user_id": "user-1", "ig_media_id": "media-gone", "published_at": "2026-10-05T10:00:00Z", "is_deleted_on_instagram": False},
-        {"id": "still-present", "user_id": "user-1", "ig_media_id": "media-here", "published_at": "2026-10-04T10:00:00Z", "is_deleted_on_instagram": False},
-        {"id": "outside-window", "user_id": "user-1", "ig_media_id": "media-old", "published_at": "2026-09-01T10:00:00Z", "is_deleted_on_instagram": False},
+        {"id": "missing-recent", "user_id": "user-1", "instagram_account_id": "account-1", "ig_media_id": "media-gone", "published_at": "2026-10-05T10:00:00Z", "is_deleted_on_instagram": False},
+        {"id": "still-present", "user_id": "user-1", "instagram_account_id": "account-1", "ig_media_id": "media-here", "published_at": "2026-10-04T10:00:00Z", "is_deleted_on_instagram": False},
+        {"id": "outside-window", "user_id": "user-1", "instagram_account_id": "account-1", "ig_media_id": "media-old", "published_at": "2026-09-01T10:00:00Z", "is_deleted_on_instagram": False},
     ])
 
     class FakePublisher:
@@ -132,12 +140,12 @@ def test_partial_inventory_marks_only_missing_rows_inside_covered_window(monkeyp
 
     assert (removed, restored) == (1, 0)
     assert queue.updates == [("missing-recent", False)]
-    assert queue.sync_attempts == ["user-1"]
+    assert queue.sync_attempts == ["account-1"]
 
 
 def test_api_failure_never_marks_a_published_reel_missing(monkeypatch) -> None:
     queue = FakeSyncQueue([
-        {"id": "reel-1", "user_id": "user-1", "ig_media_id": "media-1", "published_at": "2026-10-05T10:00:00Z", "is_deleted_on_instagram": False},
+        {"id": "reel-1", "user_id": "user-1", "instagram_account_id": "account-1", "ig_media_id": "media-1", "published_at": "2026-10-05T10:00:00Z", "is_deleted_on_instagram": False},
     ])
 
     class BrokenPublisher:
@@ -150,4 +158,39 @@ def test_api_failure_never_marks_a_published_reel_missing(monkeypatch) -> None:
 
     assert (removed, restored) == (0, 0)
     assert queue.updates == []
-    assert queue.sync_attempts == ["user-1"]
+    assert queue.sync_attempts == ["account-1"]
+
+
+def test_two_accounts_reconcile_with_their_own_tokens_and_media_lists(monkeypatch) -> None:
+    now = datetime.now(timezone.utc)
+    accounts = [
+        {"id": "account-1", "user_id": "user-1", "instagram_user_id": "ig-1", "last_media_sync_at": None},
+        {"id": "account-2", "user_id": "user-1", "instagram_user_id": "ig-2", "last_media_sync_at": None},
+    ]
+    rows = [
+        {"id": "reel-1", "user_id": "user-1", "instagram_account_id": "account-1", "ig_media_id": "media-1", "published_at": now.isoformat(), "is_deleted_on_instagram": False},
+        {"id": "reel-2", "user_id": "user-1", "instagram_account_id": "account-2", "ig_media_id": "media-2", "published_at": now.isoformat(), "is_deleted_on_instagram": False},
+    ]
+    queue = FakeSyncQueue(rows, accounts)
+    publisher_calls = []
+
+    class AccountInventory:
+        def __init__(self, instagram_user_id: str) -> None:
+            self.instagram_user_id = instagram_user_id
+
+        def list_own_media_ids(self, oldest_needed_at: datetime, max_pages: int):
+            assert max_pages == github_worker.MAX_MEDIA_SYNC_PAGES
+            return ({"media-2"} if self.instagram_user_id == "ig-2" else set()), now, True
+
+    def publisher_factory(settings, token, instagram_user_id):
+        publisher_calls.append((token, instagram_user_id))
+        return AccountInventory(instagram_user_id)
+
+    monkeypatch.setattr(github_worker, "_publisher", publisher_factory)
+
+    removed, restored = github_worker._sync_published_instagram_media(queue, settings=None)
+
+    assert (removed, restored) == (1, 0)
+    assert publisher_calls == [("token-account-1", "ig-1"), ("token-account-2", "ig-2")]
+    assert queue.updates == [("reel-1", False)]
+    assert queue.sync_attempts == ["account-1", "account-2"]

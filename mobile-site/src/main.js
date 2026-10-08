@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, PUBLISHER_SETUP_READY } from './config.js';
+import { estimateQueueEta, selectInstagramAccount } from './queue-utils.js';
 import { parseReelLines } from './url-utils.js';
 import './styles.css';
 
@@ -7,7 +8,7 @@ const root = document.querySelector('#app');
 const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
 });
-const state = { session: null, rows: [], instagram: null, filter: 'all', theme: localStorage.getItem('reelflow-theme') || 'dark', installPrompt: null, busy: false };
+const state = { session: null, rows: [], instagram: null, instagramAccounts: [], preferNewestInstagramAccount: false, filter: 'all', theme: localStorage.getItem('reelflow-theme') || 'dark', installPrompt: null, busy: false };
 let idleQueueRefreshTicks = 0;
 document.documentElement.dataset.theme = state.theme;
 
@@ -53,6 +54,17 @@ function reelDraftStorageKey() {
   const userId = state.session?.user?.id;
   return userId ? `${REEL_DRAFT_STORAGE_PREFIX}:${userId}` : null;
 }
+function activeInstagramStorageKey() {
+  const userId = state.session?.user?.id;
+  return userId ? `reelflow-active-instagram-v1:${userId}` : null;
+}
+function saveActiveInstagramSelection(accountId) {
+  const key = activeInstagramStorageKey();
+  if (!key || !accountId) return;
+  try { localStorage.setItem(key, accountId); } catch (error) {
+    console.warn('Seçili Instagram hesabı bu cihazda saklanamadı:', error);
+  }
+}
 function saveReelDraft() {
   const key = reelDraftStorageKey();
   const urlInput = document.querySelector('#reel-input');
@@ -88,37 +100,6 @@ function statusMeta(status) {
     queued: ['Sırada', 'queued'], processing: ['Yayınlanıyor', 'processing'],
     published: ['Yayınlandı', 'published'], failed: ['Hata', 'failed'], cancelled: ['İptal edildi', 'cancelled'],
   })[status] || ['Bilinmiyor', 'queued'];
-}
-function estimateQueueEta(rows, instagram, now = Date.now()) {
-  const estimates = new Map();
-  if (!instagram) return estimates;
-  const intervalMs = Number(instagram.publish_interval_minutes || 360) * 60_000;
-  if (!Number.isFinite(intervalMs) || intervalMs <= 0) return estimates;
-  const queued = rows.filter((row) => row.status === 'queued');
-  const priority = queued.filter((row) => row.publish_now);
-  const regular = queued.filter((row) => !row.publish_now);
-  const createdAt = (row) => {
-    const time = Date.parse(row.created_at || '');
-    return Number.isFinite(time) ? time : 0;
-  };
-  const byAge = (a, b) => createdAt(a) - createdAt(b);
-  priority.sort(byAge).forEach((row) => estimates.set(row.id, now));
-  const accountLast = Date.parse(instagram.last_published_at || '');
-  let lastPublished = Number.isFinite(accountLast) ? accountLast : 0;
-  for (const row of rows) {
-    if (row.status !== 'published') continue;
-    const publishedAt = Date.parse(row.published_at || row.created_at || '');
-    if (Number.isFinite(publishedAt)) lastPublished = Math.max(lastPublished, publishedAt);
-  }
-  const hasInFlightOrPriority = priority.length > 0 || rows.some((row) => row.status === 'processing');
-  let nextAt = hasInFlightOrPriority
-    ? now + intervalMs
-    : lastPublished ? Math.max(now, lastPublished + intervalMs) : now;
-  regular.sort(byAge).forEach((row) => {
-    estimates.set(row.id, nextAt);
-    nextAt += intervalMs;
-  });
-  return estimates;
 }
 function formatQueueEta(targetAt, priority, now = Date.now()) {
   if (priority) return 'Öncelikli · sıradaki otomatik turda';
@@ -270,7 +251,8 @@ function updateStats() {
 function renderQueue() {
   const list = document.querySelector('#queue-list');
   if (!list) return;
-  const etaById = estimateQueueEta(state.rows, state.instagram);
+  const etaById = estimateQueueEta(state.rows, state.instagramAccounts);
+  const accountById = new Map(state.instagramAccounts.map((account) => [account.id, account]));
   const query = (document.querySelector('#queue-search')?.value || '').trim().toLowerCase();
   const filtered = state.rows.filter((row) => {
     const unavailable = row.status === 'published' && row.is_deleted_on_instagram === true;
@@ -278,7 +260,8 @@ function renderQueue() {
       || (state.filter === 'published' && row.status === 'published' && !unavailable)
       || (state.filter === 'unavailable' && unavailable)
       || (!['all', 'published', 'unavailable'].includes(state.filter) && row.status === state.filter);
-    const queryMatch = !query || `${row.shortcode} ${row.source_url} ${row.caption}`.toLowerCase().includes(query);
+    const accountName = accountById.get(row.instagram_account_id)?.username || '';
+    const queryMatch = !query || `${row.shortcode} ${row.source_url} ${row.caption} ${accountName}`.toLowerCase().includes(query);
     return filterMatch && queryMatch;
   });
   if (!filtered.length) {
@@ -296,14 +279,24 @@ function renderQueue() {
         && Number.isFinite(triggerAt) && Date.now() - triggerAt < 120_000;
       const progress = Math.max(0, Math.min(100, Number(row.progress || 0)));
       const safeUrl = escapeHtml(row.source_url);
+      const targetAccount = accountById.get(row.instagram_account_id);
+      const targetConnected = Boolean(targetAccount && !targetAccount.disconnected_at);
+      const targetLabel = targetAccount
+        ? `@${targetAccount.username}${targetAccount.disconnected_at ? ' · bağlantı kesildi' : ''}`
+        : 'hesap seçilmedi';
+      const assignAction = !targetConnected && state.instagram && ['queued', 'failed'].includes(row.status)
+        ? `<button class="mini-button mini-assign" data-action="assign-account" data-id="${escapeHtml(row.id)}">Seçili hesaba ata</button>`
+        : '';
       const actions = row.status === 'failed'
-        ? `<button class="mini-button" data-action="retry" data-id="${escapeHtml(row.id)}">Tekrar dene</button>`
+        ? `${targetConnected ? `<button class="mini-button" data-action="retry" data-id="${escapeHtml(row.id)}">Tekrar dene</button>` : ''}${assignAction}`
         : row.status === 'queued'
-          ? `${row.publish_now
-            ? triggerRecentlySent
-              ? `<button class="mini-button mini-now" disabled title="Bulut işçisi tetiklendi; sırada" data-id="${escapeHtml(row.id)}">Tetiklendi</button>`
-              : `<button class="mini-button mini-now" title="Öncelikli Reel’i şimdi yeniden tetikle" data-action="publish-now-retrigger" data-id="${escapeHtml(row.id)}">Şimdi tetikle</button>`
-            : `<button class="mini-button mini-now" title="Bu Reel için yayın aralığını atla" data-action="publish-now" data-id="${escapeHtml(row.id)}">Hemen paylaş</button>`}<button class="mini-button mini-danger" data-action="cancel" data-id="${escapeHtml(row.id)}">Kaldır</button>`
+          ? `${targetConnected
+            ? row.publish_now
+              ? triggerRecentlySent
+                ? `<button class="mini-button mini-now" disabled title="Bulut işçisi tetiklendi; sırada" data-id="${escapeHtml(row.id)}">Tetiklendi</button>`
+                : `<button class="mini-button mini-now" title="Öncelikli Reel’i şimdi yeniden tetikle" data-action="publish-now-retrigger" data-id="${escapeHtml(row.id)}">Şimdi tetikle</button>`
+              : `<button class="mini-button mini-now" title="Bu Reel için yayın aralığını atla" data-action="publish-now" data-id="${escapeHtml(row.id)}">Hemen paylaş</button>`
+            : assignAction}<button class="mini-button mini-danger" data-action="cancel" data-id="${escapeHtml(row.id)}">Kaldır</button>`
           : '';
       const bar = row.status === 'processing' ? `<div class="progress-line"><span style="width:${progress}%"></span></div>` : '';
       const progressText = row.status === 'processing'
@@ -312,7 +305,7 @@ function renderQueue() {
           ? `<small class="queue-eta">${icon('clock', 12)} ${escapeHtml(triggerRecentlySent ? 'Bulut işçisi tetiklendi; sıra bekleniyor' : formatQueueEta(etaById.get(row.id), Boolean(row.publish_now)))}</small>`
           : '';
       const error = row.status === 'failed' && row.error_message ? `<p class="error-note">${escapeHtml(row.error_message)}</p>` : '';
-      return `<article class="reel-row enter" style="--row-index:${Math.min(index, 8)}"><div class="reel-thumb thumb-${index % 4}"><span class="thumb-play">▶</span><span class="thumb-label">REEL</span></div><div class="reel-details"><div class="reel-title-line"><strong>/${escapeHtml(row.shortcode)}</strong><span class="status-pill status-${statusClass}"><i></i>${label}</span></div><p class="reel-caption">${escapeHtml(row.caption || 'Açıklama eklenmedi')}</p><div class="reel-meta"><span>${icon('clock', 13)} ${fmtDate(row.created_at)}</span><a href="${safeUrl}" target="_blank" rel="noopener noreferrer">Kaynağı gör ${icon('external', 13)}</a></div>${bar}${progressText}${error}</div><div class="reel-actions">${actions}</div></article>`;
+      return `<article class="reel-row enter" style="--row-index:${Math.min(index, 8)}"><div class="reel-thumb thumb-${index % 4}"><span class="thumb-play">▶</span><span class="thumb-label">REEL</span></div><div class="reel-details"><div class="reel-title-line"><strong>/${escapeHtml(row.shortcode)}</strong><span class="status-pill status-${statusClass}"><i></i>${label}</span></div><p class="reel-caption">${escapeHtml(row.caption || 'Açıklama eklenmedi')}</p><small class="reel-target-account ${targetConnected ? '' : 'is-unavailable'}">${icon('reel', 11)} Yayın hesabı: ${escapeHtml(targetLabel)}</small><div class="reel-meta"><span>${icon('clock', 13)} ${fmtDate(row.created_at)}</span><a href="${safeUrl}" target="_blank" rel="noopener noreferrer">Kaynağı gör ${icon('external', 13)}</a></div>${bar}${progressText}${error}</div><div class="reel-actions">${actions}</div></article>`;
     }).join('');
   }
   const footer = document.querySelector('#queue-footer');
@@ -323,7 +316,7 @@ function renderQueue() {
 async function loadQueue(silent = false) {
   if (!state.session) return;
   const { data, error } = await supabase.from('reels_queue')
-    .select('id,shortcode,shortcode_key,source_url,caption,status,progress,stage,error_message,publish_now,is_deleted_on_instagram,published_at,instagram_deleted_at,created_at,updated_at')
+    .select('id,instagram_account_id,shortcode,shortcode_key,source_url,caption,status,progress,stage,error_message,publish_now,is_deleted_on_instagram,published_instagram_user_id,published_at,instagram_deleted_at,created_at,updated_at')
     .eq('user_id', state.session.user.id).order('created_at', { ascending: false }).limit(200);
   if (error) {
     if (!silent) toast(`Kuyruk yüklenemedi: ${error.message}`, 'error');
@@ -349,15 +342,23 @@ async function loadQueue(silent = false) {
 async function loadInstagramAccount() {
   if (!state.session) return;
   const { data, error } = await supabase.from('instagram_accounts')
-    .select('instagram_user_id,username,token_expires_at,connected_at,publish_interval_minutes,last_published_at')
-    .eq('user_id', state.session.user.id).maybeSingle();
+    .select('id,instagram_user_id,username,token_expires_at,connected_at,publish_interval_minutes,last_published_at,last_processed_at,last_media_sync_at,disconnected_at')
+    .eq('user_id', state.session.user.id).order('connected_at', { ascending: false }).limit(50);
   if (error) {
     state.instagram = null;
+    state.instagramAccounts = [];
     renderInstagramAccount();
+    renderQueue();
     toast('Instagram bağlantı durumu alınamadı. Sayfayı yenileyip tekrar dene.', 'error');
     return;
   }
-  state.instagram = data || null;
+  state.instagramAccounts = data || [];
+  const key = activeInstagramStorageKey();
+  let savedAccountId = '';
+  try { savedAccountId = key ? localStorage.getItem(key) || '' : ''; } catch { /* Device storage may be restricted. */ }
+  state.instagram = selectInstagramAccount(state.instagramAccounts, savedAccountId, state.preferNewestInstagramAccount);
+  state.preferNewestInstagramAccount = false;
+  if (state.instagram) saveActiveInstagramSelection(state.instagram.id);
   renderInstagramAccount();
   renderQueue();
 }
@@ -365,18 +366,20 @@ async function loadInstagramAccount() {
 function renderInstagramAccount() {
   const card = document.querySelector('#instagram-account-card');
   if (!card) return;
+  const connected = state.instagramAccounts.filter((account) => !account.disconnected_at);
   if (state.instagram) {
     const intervals = [[60, '1 saat'], [180, '3 saat'], [360, '6 saat'], [720, '12 saat'], [1440, '1 gün'], [2880, '2 gün']];
     const selectedInterval = Number(state.instagram.publish_interval_minutes || 360);
     const options = intervals.map(([minutes, label]) => `<option value="${minutes}" ${selectedInterval === minutes ? 'selected' : ''}>${label}</option>`).join('');
-    card.innerHTML = `<div class="instagram-account-top"><div class="instagram-account-copy"><span class="ig-connected-mark">✓</span><div><strong>@${escapeHtml(state.instagram.username)}</strong><small>Instagram profesyonel hesabı bağlı · token bitişi ${fmtDate(state.instagram.token_expires_at)}</small></div></div><button id="instagram-disconnect-button" class="mini-button mini-danger">Bağlantıyı kes</button></div><label class="ig-interval-row" for="publish-interval-select"><span><strong>Reels arasındaki süre</strong><small>Normal kuyruk bu aralığa uyar; “Hemen paylaş” tek Reel için beklemeyi atlar.</small></span><select id="publish-interval-select" class="ig-interval-select" aria-label="Reels arasındaki süre">${options}</select></label>`;
+    const accountOptions = connected.map((account) => `<option value="${escapeHtml(account.id)}" ${account.id === state.instagram.id ? 'selected' : ''}>@${escapeHtml(account.username)}</option>`).join('');
+    card.innerHTML = `<div class="instagram-account-top"><div class="instagram-account-copy"><span class="ig-connected-mark">✓</span><div><strong>@${escapeHtml(state.instagram.username)}</strong><small>Instagram profesyonel hesabı bağlı · token bitişi ${fmtDate(state.instagram.token_expires_at)}</small></div></div><button id="instagram-disconnect-button" class="mini-button mini-danger">Bağlantıyı kes</button></div><label class="ig-account-select-row" for="instagram-account-select"><span><strong>Yayın hesabı</strong><small>Yeni Reels bu hesaba gider; kuyruktaki mevcut Reels’in hedefi değişmez.</small></span><select id="instagram-account-select" class="ig-account-select" aria-label="Yeni Reels için yayın hesabı" ${connected.length < 2 ? 'disabled' : ''}>${accountOptions}</select></label><div class="ig-account-actions"><button id="instagram-connect-button" class="mini-button ig-add-account">${icon('plus', 13)} Hesap ekle</button></div><label class="ig-interval-row" for="publish-interval-select"><span><strong>@${escapeHtml(state.instagram.username)} · Reels aralığı</strong><small>Yalnızca seçili hesabın normal aralığıdır; “Hemen paylaş” tek Reel’in beklemesini atlar.</small></span><select id="publish-interval-select" class="ig-interval-select" aria-label="Seçili hesabın Reels aralığı">${options}</select></label><p id="instagram-connect-status" class="oauth-status" role="status" aria-live="polite"></p>`;
   } else {
-    card.innerHTML = `<div class="instagram-account-copy"><span class="ig-pending-mark">IG</span><div><strong>Instagram hesabını bağla</strong><small>Business veya Creator hesabı gerekir. Meta uygulaması test modunda olduğundan Instagram Tester davetini kabul etmiş hesaplar bağlanabilir.</small></div></div><button id="instagram-connect-button" class="button button-primary ig-connect-button">${icon('reel', 16)} Hesabımı bağla</button><p id="instagram-connect-status" class="oauth-status" role="status" aria-live="polite"></p>`;
-    card.querySelector('#instagram-connect-button')?.addEventListener('click', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      void connectInstagram();
-    });
+    const disconnected = state.instagramAccounts[0];
+    const title = disconnected ? `@${escapeHtml(disconnected.username)} hesabının bağlantısı kesilmiş` : 'Instagram hesabını bağla';
+    const detail = disconnected
+      ? 'Kuyruk geçmişi korunuyor. Hesabı yeniden bağlayabilir veya başka bir Instagram hesabı ekleyebilirsin.'
+      : 'Business veya Creator hesabı gerekir. Meta uygulaması test modunda olduğundan Instagram Tester davetini kabul etmiş hesaplar bağlanabilir.';
+    card.innerHTML = `<div class="instagram-account-copy"><span class="ig-pending-mark">IG</span><div><strong>${title}</strong><small>${detail}</small></div></div><button id="instagram-connect-button" class="button button-primary ig-connect-button">${icon('reel', 16)} ${disconnected ? 'Instagram hesabı bağla' : 'Hesabımı bağla'}</button><p id="instagram-connect-status" class="oauth-status" role="status" aria-live="polite"></p>`;
   }
   const addButton = document.querySelector('#add-submit');
   if (addButton) addButton.disabled = !state.instagram;
@@ -384,19 +387,21 @@ function renderInstagramAccount() {
 
 async function savePublishInterval(minutes) {
   const allowed = [60, 180, 360, 720, 1440, 2880];
-  if (!state.session || !allowed.includes(minutes)) return;
+  if (!state.session || !state.instagram || !allowed.includes(minutes)) return;
   const select = document.querySelector('#publish-interval-select');
   if (select) select.disabled = true;
   const { data, error } = await supabase.from('instagram_accounts')
     .update({ publish_interval_minutes: minutes })
+    .eq('id', state.instagram.id)
     .eq('user_id', state.session.user.id)
-    .select('publish_interval_minutes').maybeSingle();
+    .select('id,publish_interval_minutes').maybeSingle();
   if (error || !data) {
     toast('Yayın aralığı kaydedilemedi. Tekrar dene.', 'error');
     await loadInstagramAccount();
     return;
   }
   state.instagram = { ...state.instagram, publish_interval_minutes: data.publish_interval_minutes };
+  state.instagramAccounts = state.instagramAccounts.map((account) => account.id === data.id ? { ...account, publish_interval_minutes: data.publish_interval_minutes } : account);
   renderInstagramAccount();
   renderQueue();
   const label = { 60: '1 saat', 180: '3 saat', 360: '6 saat', 720: '12 saat', 1440: '1 gün', 2880: '2 gün' }[minutes];
@@ -484,22 +489,26 @@ async function connectInstagram() {
 
 async function disconnectInstagram() {
   const button = document.querySelector('#instagram-disconnect-button');
+  const accountId = state.instagram?.id;
+  if (!accountId) return;
   if (button) { button.disabled = true; button.textContent = 'Kaldırılıyor…'; }
-  const { data, error } = await supabase.functions.invoke('instagram-disconnect', { body: {} });
+  const { data, error } = await supabase.functions.invoke('instagram-disconnect', { body: { account_id: accountId } });
   if (error || data?.error) {
     toast('Instagram bağlantısı kaldırılamadı. Tekrar dene.', 'error');
     renderInstagramAccount();
     return;
   }
-  state.instagram = null;
-  renderInstagramAccount();
-  toast('Instagram hesabının bağlantısı kesildi.', 'success');
+  try { localStorage.removeItem(activeInstagramStorageKey()); } catch { /* Storage may be restricted. */ }
+  await loadInstagramAccount();
+  await loadQueue(true);
+  toast('Seçili Instagram hesabının bağlantısı kesildi; diğer kayıtlı hesapların ve kuyruk geçmişin korundu.', 'success');
 }
 
 function consumeInstagramCallback() {
   const url = new URL(window.location.href);
   const result = url.searchParams.get('instagram');
   if (!result) return;
+  if (result === 'connected') state.preferNewestInstagramAccount = true;
   url.searchParams.delete('instagram');
   window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
   const messages = {
@@ -524,6 +533,7 @@ async function addToQueue(form) {
     toast('Önce kendi Instagram profesyonel hesabını bağla.', 'warn');
     return;
   }
+  const targetInstagramAccountId = state.instagram.id;
   const textarea = form.querySelector('#reel-input');
   const captionInput = form.querySelector('#caption-input');
   const sharedCaption = captionInput.value.trim();
@@ -552,6 +562,7 @@ async function addToQueue(form) {
       p_source_url: item.url,
       p_caption: sharedCaption || item.caption,
       p_rights_confirmed: true,
+      p_instagram_account_id: targetInstagramAccountId,
     });
     if (error) {
       failed++;
@@ -592,6 +603,11 @@ async function handleClick(event) {
   if (!button) return;
   if (button.matches('.signout')) {
     await supabase.auth.signOut();
+    return;
+  }
+  if (button.id === 'instagram-connect-button') {
+    event.preventDefault();
+    await connectInstagram();
     return;
   }
   if (button.id === 'instagram-disconnect-button') {
@@ -644,6 +660,23 @@ async function handleClick(event) {
     state.filter = button.dataset.filter;
     document.querySelectorAll('.filter-chip').forEach((node) => node.classList.toggle('active', node === button));
     renderQueue();
+    return;
+  }
+  if (button.dataset.action === 'assign-account') {
+    if (!state.instagram) {
+      toast('Önce kullanmak istediğin Instagram hesabını bağla ve seç.', 'warn');
+      return;
+    }
+    button.disabled = true;
+    button.textContent = 'Hedef değiştiriliyor…';
+    const { data, error } = await supabase.rpc('assign_reel_account', {
+      p_id: button.dataset.id,
+      p_instagram_account_id: state.instagram.id,
+    });
+    if (error) toast('Reel’in hedef hesabı değiştirilemedi. Aynı Reel seçili hesapta zaten kayıtlı olabilir.', 'error');
+    else if (data) toast(`Reel @${state.instagram.username} hesabına atandı.`, 'success');
+    else toast('Bu Reel artık hedef hesabı değiştirilebilecek durumda değil.', 'warn');
+    await loadQueue(true);
     return;
   }
   if (button.dataset.action === 'retry') {
@@ -727,6 +760,15 @@ root.addEventListener('input', (event) => {
   if (event.target.id === 'reel-input' || event.target.id === 'caption-input') saveReelDraft();
 });
 root.addEventListener('change', async (event) => {
+  if (event.target.id === 'instagram-account-select') {
+    const selected = state.instagramAccounts.find((account) => account.id === event.target.value && !account.disconnected_at);
+    if (!selected) return;
+    state.instagram = selected;
+    saveActiveInstagramSelection(selected.id);
+    renderInstagramAccount();
+    renderQueue();
+    toast(`Yeni Reels @${selected.username} hesabına kuyruğa girer. Mevcut Reels’in hedefi değişmedi.`, 'success');
+  }
   if (event.target.id === 'publish-interval-select') await savePublishInterval(Number(event.target.value));
 });
 window.addEventListener('pagehide', saveReelDraft);
@@ -734,6 +776,11 @@ window.addEventListener('pagehide', saveReelDraft);
 supabase.auth.onAuthStateChange((event, session) => {
   if (session?.user) {
     const sameUser = state.session?.user?.id === session.user.id;
+    if (!sameUser) {
+      state.rows = [];
+      state.instagram = null;
+      state.instagramAccounts = [];
+    }
     state.session = session;
     if (event === 'TOKEN_REFRESHED' && sameUser) return;
     state.instagram = null;
@@ -744,6 +791,7 @@ supabase.auth.onAuthStateChange((event, session) => {
     state.session = null;
     state.rows = [];
     state.instagram = null;
+    state.instagramAccounts = [];
     renderLogin();
   }
 });
