@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { estimateQueueEta, pruneReelAccountTargets, resolveReelTargetAssignments, selectInstagramAccount, setReelAccountTarget } from '../src/queue-utils.js';
+import { estimateQueueEta, pruneReelAccountTargets, pruneReelCaptionTemplateSelections, resolveReelTargetAssignments, selectInstagramAccount, setReelAccountTarget } from '../src/queue-utils.js';
 
 const now = Date.parse('2026-10-08T12:00:00Z');
 const accounts = [
@@ -35,6 +35,13 @@ test('prunes only target overrides for URLs removed from the draft and preserves
   const stored = { ABC123: 'account-a', gone123: 'account-b', invalid: '' };
 
   assert.deepEqual(pruneReelAccountTargets(items, stored), { abc123: 'account-a' });
+});
+
+test('preserves a saved template selection per URL and prunes selections when the URL is removed', () => {
+  const items = [{ shortcode: 'AbC123', shortcodeKey: 'abc123' }];
+  const stored = { ABC123: 'template-1', gone123: 'template-2' };
+
+  assert.deepEqual(pruneReelCaptionTemplateSelections(items, stored), { abc123: 'template-1' });
 });
 
 test('calculates normal queue ETAs independently for each Instagram account', () => {

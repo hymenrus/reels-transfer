@@ -15,12 +15,20 @@ export function setReelAccountTarget(targets = {}, shortcodeKey, accountId) {
   return { ...(targets && typeof targets === 'object' && !Array.isArray(targets) ? targets : {}), [key]: id };
 }
 
-export function pruneReelAccountTargets(items = [], targets = {}) {
+function pruneReelValueMap(items = [], targets = {}) {
   if (!targets || typeof targets !== 'object' || Array.isArray(targets)) return {};
   const validKeys = new Set(items.map(reelShortcodeKey).filter(Boolean));
   return Object.fromEntries(Object.entries(targets)
     .map(([key, id]) => [String(key).trim().toLowerCase(), String(id || '').trim()])
     .filter(([key, id]) => validKeys.has(key) && id));
+}
+
+export function pruneReelAccountTargets(items = [], targets = {}) {
+  return pruneReelValueMap(items, targets);
+}
+
+export function pruneReelCaptionTemplateSelections(items = [], selections = {}) {
+  return pruneReelValueMap(items, selections);
 }
 
 export function resolveReelTargetAssignments(items = [], targets = {}, defaultAccountId = '') {

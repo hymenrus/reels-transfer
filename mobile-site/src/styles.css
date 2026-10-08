@@ -63,7 +63,8 @@
 .reel-target-panel[hidden]{display:none}
 .reel-target-heading{display:grid;gap:4px}.reel-target-heading strong{font-size:10px}.reel-target-heading small{color:var(--muted);font-size:8px;line-height:1.5}
 .reel-target-list{display:grid;gap:7px}
-.reel-target-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(160px,240px);align-items:center;gap:12px;padding:9px 10px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+.reel-target-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(130px,.75fr) minmax(165px,1fr);align-items:center;gap:9px;padding:9px 10px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
 .reel-target-info{display:grid;gap:3px;min-width:0}.reel-target-info strong{font-size:10px;overflow-wrap:anywhere}.reel-target-info small{color:var(--muted);font-size:8px;line-height:1.4}.reel-target-info small.is-unavailable{color:var(--red)}
+.reel-target-field{display:grid;gap:4px;min-width:0}.reel-target-field>span{color:var(--muted);font-size:8px;line-height:1.2}
 .reel-target-row select{box-sizing:border-box;width:100%;min-width:0;min-height:44px;padding:9px 11px;border:1px solid var(--line);border-radius:9px;background:var(--surface-2);color:var(--text);font:inherit;font-size:10px;outline:none}.reel-target-row select:focus{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 15%,transparent)}
-@media(max-width:560px){.reel-target-panel{gap:9px;padding:11px}.reel-target-heading strong{font-size:12px}.reel-target-heading small{font-size:10px}.reel-target-row{grid-template-columns:minmax(0,1fr);gap:7px;padding:10px}.reel-target-info strong{font-size:12px}.reel-target-info small{font-size:10px}.reel-target-row select{min-height:46px;font-size:16px}}
+@media(max-width:560px){.reel-target-panel{gap:9px;padding:11px}.reel-target-heading strong{font-size:12px}.reel-target-heading small{font-size:10px}.reel-target-row{grid-template-columns:minmax(0,1fr);gap:8px;padding:10px}.reel-target-info strong{font-size:12px}.reel-target-info small{font-size:10px}.reel-target-field>span{font-size:10px}.reel-target-row select{min-height:46px;font-size:16px}}

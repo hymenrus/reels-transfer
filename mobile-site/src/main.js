@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, PUBLISHER_SETUP_READY } from './config.js';
-import { estimateQueueEta, pruneReelAccountTargets, resolveReelTargetAssignments, selectInstagramAccount, setReelAccountTarget } from './queue-utils.js';
-import { captionForAccount, composeCaptionWithTags, hasReelDraftContent, setCaptionForAccount, setTagsForAccount, tagsForAccount, validateCaptionTemplate } from './caption-utils.js';
+import { estimateQueueEta, pruneReelAccountTargets, pruneReelCaptionTemplateSelections, resolveReelTargetAssignments, selectInstagramAccount, setReelAccountTarget } from './queue-utils.js';
+import { captionForAccount, captionForReelUrl, hasReelDraftContent, setCaptionForAccount, setTagsForAccount, tagsForAccount, validateCaptionTemplate } from './caption-utils.js';
 import { parseReelLines } from './url-utils.js';
 import './styles.css';
 
@@ -9,7 +9,7 @@ const root = document.querySelector('#app');
 const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
 });
-const state = { session: null, rows: [], instagram: null, instagramAccounts: [], reelAccountTargets: {}, captionTemplates: [], captionTemplatesLoading: false, captionTemplatesError: '', selectedCaptionTemplateId: '', preferNewestInstagramAccount: false, instagramConnectionMessage: null, filter: 'all', theme: localStorage.getItem('reelflow-theme') || 'dark', installPrompt: null, busy: false };
+const state = { session: null, rows: [], instagram: null, instagramAccounts: [], reelAccountTargets: {}, reelCaptionTemplateSelections: {}, captionTemplates: [], captionTemplatesLoading: false, captionTemplatesError: '', selectedCaptionTemplateId: '', preferNewestInstagramAccount: false, instagramConnectionMessage: null, filter: 'all', theme: localStorage.getItem('reelflow-theme') || 'dark', installPrompt: null, busy: false };
 let instagramAccountLoadGeneration = 0;
 let captionTemplateLoadGeneration = 0;
 let idleQueueRefreshTicks = 0;
@@ -87,8 +87,14 @@ function saveReelDraft() {
   const captionDraft = setCaptionForAccount({ ...readReelDraft(), urls: urlInput.value }, state.instagram?.id, captionInput.value);
   const tagsInput = document.querySelector('#caption-template-tags');
   const tagDraft = setTagsForAccount(captionDraft, state.instagram?.id, tagsInput?.value || '');
-  state.reelAccountTargets = pruneReelAccountTargets(parseReelLines(urlInput.value).items, state.reelAccountTargets);
-  const draft = { ...tagDraft, reelAccountTargets: { ...state.reelAccountTargets } };
+  const items = parseReelLines(urlInput.value).items;
+  state.reelAccountTargets = pruneReelAccountTargets(items, state.reelAccountTargets);
+  state.reelCaptionTemplateSelections = pruneReelCaptionTemplateSelections(items, state.reelCaptionTemplateSelections);
+  const draft = {
+    ...tagDraft,
+    reelAccountTargets: { ...state.reelAccountTargets },
+    reelCaptionTemplateSelections: { ...state.reelCaptionTemplateSelections },
+  };
   try {
     if (!hasReelDraftContent(draft)) localStorage.removeItem(key);
     else localStorage.setItem(key, JSON.stringify(draft));
@@ -101,7 +107,9 @@ function restoreReelDraft() {
   if (!key) return;
   try {
     const draft = readReelDraft();
-    state.reelAccountTargets = pruneReelAccountTargets(parseReelLines(typeof draft.urls === 'string' ? draft.urls : '').items, draft.reelAccountTargets);
+    const items = parseReelLines(typeof draft.urls === 'string' ? draft.urls : '').items;
+    state.reelAccountTargets = pruneReelAccountTargets(items, draft.reelAccountTargets);
+    state.reelCaptionTemplateSelections = pruneReelCaptionTemplateSelections(items, draft.reelCaptionTemplateSelections);
     const urlInput = document.querySelector('#reel-input');
     const captionInput = document.querySelector('#caption-input');
     const tagsInput = document.querySelector('#caption-template-tags');
@@ -270,6 +278,7 @@ function renderReelTargetAssignments() {
 
   const items = parseReelLines(textarea.value).items;
   state.reelAccountTargets = pruneReelAccountTargets(items, state.reelAccountTargets);
+  state.reelCaptionTemplateSelections = pruneReelCaptionTemplateSelections(items, state.reelCaptionTemplateSelections);
   if (!items.length) {
     panel.hidden = true;
     panel.innerHTML = '';
@@ -292,12 +301,19 @@ function renderReelTargetAssignments() {
     const targetAvailable = connectedAccounts.some((account) => account.id === targetId);
     const staleOption = targetAvailable ? '' : `<option value="${escapeHtml(targetId)}" selected disabled>@${escapeHtml(targetAccount?.username || 'hesap')} · bağlantı kesildi</option>`;
     const options = connectedAccounts.map((account) => `<option value="${escapeHtml(account.id)}"${account.id === targetId ? ' selected' : ''}>@${escapeHtml(account.username)}</option>`).join('');
+    const templateId = state.reelCaptionTemplateSelections[item.shortcodeKey] || '';
+    const selectedTemplate = state.captionTemplates.find((template) => template.id === templateId);
+    const staleTemplateOption = templateId && !selectedTemplate
+      ? `<option value="${escapeHtml(templateId)}" selected disabled>Seçili şablon bulunamadı</option>`
+      : '';
+    const templateOptions = state.captionTemplates.map((template) => `<option value="${escapeHtml(template.id)}"${template.id === templateId ? ' selected' : ''}>${escapeHtml(template.name)}</option>`).join('');
+    const templateDisabled = state.captionTemplatesLoading ? ' disabled' : '';
     const status = targetAvailable
       ? `Hedef hesap: @${escapeHtml(targetAccount?.username || '')}`
       : 'Bu hesap bağlantısı kesilmiş; yeniden bağla veya başka hedef seç.';
-    return `<div class="reel-target-row"><div class="reel-target-info"><strong>/${escapeHtml(item.shortcode)}</strong><small class="${targetAvailable ? '' : 'is-unavailable'}">${status}</small></div><label><span class="sr-only">/${escapeHtml(item.shortcode)} yayın hesabı</span><select data-reel-target-select data-shortcode-key="${escapeHtml(item.shortcodeKey)}" aria-label="/${escapeHtml(item.shortcode)} yayın hesabı">${staleOption}${options}</select></label></div>`;
+    return `<div class="reel-target-row"><div class="reel-target-info"><strong>/${escapeHtml(item.shortcode)}</strong><small class="${targetAvailable ? '' : 'is-unavailable'}">${status}</small></div><label class="reel-target-field"><span>Yayın hesabı</span><select data-reel-target-select data-shortcode-key="${escapeHtml(item.shortcodeKey)}" aria-label="/${escapeHtml(item.shortcode)} yayın hesabı">${staleOption}${options}</select></label><label class="reel-target-field"><span>Açıklama taslağı</span><select data-reel-caption-template data-shortcode-key="${escapeHtml(item.shortcodeKey)}" aria-label="/${escapeHtml(item.shortcode)} açıklama taslağı"${templateDisabled}>${staleTemplateOption}<option value=""${templateId ? '' : ' selected'}>Genel açıklama</option>${templateOptions}</select></label></div>`;
   }).join('');
-  panel.innerHTML = `<div class="reel-target-heading"><strong>Her Reel için yayın hesabı</strong><small>Hedef seçimi URL başına uygulanır; kuyruğa eklenince sabitlenir.</small></div><div class="reel-target-list">${rows}</div>`;
+  panel.innerHTML = `<div class="reel-target-heading"><strong>Her Reel için hesap ve açıklama</strong><small>URL başına hesap ve kayıtlı açıklama seçebilirsin. “Genel açıklama” seçiliyse üstteki ortak açıklama uygulanır.</small></div><div class="reel-target-list">${rows}</div>`;
 }
 function updateStats() {
   const counts = { total: state.rows.length, queued: 0, published: 0, failed: 0 };
@@ -454,6 +470,7 @@ async function loadCaptionTemplates() {
   state.selectedCaptionTemplateId = '';
   state.captionTemplatesLoading = Boolean(userId);
   renderCaptionTemplates();
+  renderReelTargetAssignments();
   if (!userId) return;
 
   const { data, error } = await supabase.from('instagram_caption_templates')
@@ -466,6 +483,7 @@ async function loadCaptionTemplates() {
   state.captionTemplatesError = error ? 'Şablonlar yüklenemedi. Sayfayı yenileyip tekrar dene.' : '';
   state.captionTemplates = Array.isArray(data) ? data : [];
   renderCaptionTemplates();
+  renderReelTargetAssignments();
 }
 
 function renderCaptionTemplates() {
@@ -548,6 +566,7 @@ async function saveCaptionTemplate() {
   nameInput.value = '';
   saveReelDraft();
   renderCaptionTemplates();
+  renderReelTargetAssignments();
   toast(existing ? 'Ortak açıklama şablonu güncellendi.' : 'Şablon kaydedildi; tüm Instagram hesaplarında ve diğer cihazlarında görünür.', 'success');
 }
 
@@ -568,8 +587,11 @@ async function deleteCaptionTemplate() {
     return;
   }
   state.captionTemplates = state.captionTemplates.filter((item) => item.id !== templateId);
+  state.reelCaptionTemplateSelections = Object.fromEntries(Object.entries(state.reelCaptionTemplateSelections).filter(([, selectedId]) => selectedId !== templateId));
   state.selectedCaptionTemplateId = '';
+  saveReelDraft();
   renderCaptionTemplates();
+  renderReelTargetAssignments();
   toast('Şablon silindi. Açıklama alanındaki metin korundu.', 'success');
 }
 
@@ -779,6 +801,7 @@ async function addToQueue(form) {
     return;
   }
   state.reelAccountTargets = pruneReelAccountTargets(parsed.items, state.reelAccountTargets);
+  state.reelCaptionTemplateSelections = pruneReelCaptionTemplateSelections(parsed.items, state.reelCaptionTemplateSelections);
   const assignments = resolveReelTargetAssignments(parsed.items, state.reelAccountTargets, state.instagram.id);
   const connectedAccountIds = new Set(state.instagramAccounts.filter((account) => account && !account.disconnected_at).map((account) => account.id));
   const unavailableAssignment = assignments.find((assignment) => !connectedAccountIds.has(assignment.instagramAccountId));
@@ -788,9 +811,28 @@ async function addToQueue(form) {
     return;
   }
   const targetByShortcode = new Map(assignments.map((assignment) => [assignment.shortcodeKey, assignment.instagramAccountId]));
-  if (parsed.items.some((item) => composeCaptionWithTags(sharedCaption || item.caption, automaticTags).length > 2200)) {
-    toast('Açıklama ve hashtag/@mention bloğu birlikte en fazla 2200 karakter olabilir.', 'error');
-    tagsInput?.focus();
+  const selectedTemplateEntries = parsed.items.map((item) => [item, state.reelCaptionTemplateSelections[item.shortcodeKey] || '']);
+  if (state.captionTemplatesLoading && selectedTemplateEntries.some(([, templateId]) => templateId)) {
+    toast('Kayıtlı açıklama şablonları yükleniyor; birkaç saniye sonra tekrar dene.', 'warn');
+    return;
+  }
+  const templateById = new Map(state.captionTemplates.map((template) => [template.id, template]));
+  const missingTemplateEntry = selectedTemplateEntries.find(([, templateId]) => templateId && !templateById.has(templateId));
+  if (missingTemplateEntry) {
+    toast(`/${missingTemplateEntry[0].shortcodeKey} için seçilen açıklama şablonu bulunamadı. Başka bir şablon seç.`, 'error');
+    renderReelTargetAssignments();
+    return;
+  }
+  const captionByShortcode = new Map(parsed.items.map((item) => {
+    const templateId = state.reelCaptionTemplateSelections[item.shortcodeKey];
+    const template = templateId ? templateById.get(templateId) : null;
+    return [item.shortcodeKey, captionForReelUrl(item.caption, sharedCaption, automaticTags, template)];
+  }));
+  const tooLongItem = parsed.items.find((item) => captionByShortcode.get(item.shortcodeKey).length > 2200);
+  if (tooLongItem) {
+    toast(`/${tooLongItem.shortcodeKey} açıklaması 2200 karakter sınırını aşıyor. Daha kısa bir şablon seç veya açıklamayı kısalt.`, 'error');
+    [...document.querySelectorAll('[data-reel-caption-template]')]
+      .find((select) => select.dataset.shortcodeKey === tooLongItem.shortcodeKey)?.focus();
     return;
   }
   if (!rights.checked) {
@@ -810,7 +852,7 @@ async function addToQueue(form) {
     const { data, error } = await supabase.rpc('enqueue_reel', {
       p_shortcode: item.shortcode,
       p_source_url: item.url,
-      p_caption: composeCaptionWithTags(sharedCaption || item.caption, automaticTags),
+      p_caption: captionByShortcode.get(item.shortcodeKey),
       p_rights_confirmed: true,
       p_instagram_account_id: targetByShortcode.get(item.shortcodeKey),
     });
@@ -834,6 +876,7 @@ async function addToQueue(form) {
     if (currentUrlInput) currentUrlInput.value = '';
     if (currentRightsInput) currentRightsInput.checked = false;
     state.reelAccountTargets = {};
+    state.reelCaptionTemplateSelections = {};
     saveReelDraft();
     updateInputCounter('');
     renderReelTargetAssignments();
@@ -1033,6 +1076,22 @@ root.addEventListener('input', (event) => {
   if (event.target.id === 'caption-input' || event.target.id === 'caption-template-tags') saveReelDraft();
 });
 root.addEventListener('change', async (event) => {
+  if (event.target.matches('[data-reel-caption-template]')) {
+    const key = event.target.dataset.shortcodeKey;
+    const templateId = event.target.value;
+    if (templateId && !state.captionTemplates.some((template) => template.id === templateId)) {
+      renderReelTargetAssignments();
+      toast('Bu açıklama şablonu artık kullanılamıyor. Bu URL için başka bir şablon seç.', 'warn');
+      return;
+    }
+    const selections = { ...state.reelCaptionTemplateSelections };
+    if (templateId) selections[key] = templateId;
+    else delete selections[key];
+    state.reelCaptionTemplateSelections = selections;
+    saveReelDraft();
+    renderReelTargetAssignments();
+    return;
+  }
   if (event.target.matches('[data-reel-target-select]')) {
     const key = event.target.dataset.shortcodeKey;
     const accountId = event.target.value;
@@ -1090,6 +1149,7 @@ supabase.auth.onAuthStateChange((event, session) => {
       state.instagram = null;
       state.instagramAccounts = [];
       state.reelAccountTargets = {};
+      state.reelCaptionTemplateSelections = {};
       state.captionTemplates = [];
       state.captionTemplatesLoading = false;
       state.captionTemplatesError = '';
@@ -1099,6 +1159,7 @@ supabase.auth.onAuthStateChange((event, session) => {
     state.session = session;
     if (event === 'TOKEN_REFRESHED' && sameUser) return;
     state.instagram = null;
+    state.reelCaptionTemplateSelections = {};
     state.captionTemplates = [];
     state.captionTemplatesLoading = false;
     state.captionTemplatesError = '';
@@ -1113,6 +1174,7 @@ supabase.auth.onAuthStateChange((event, session) => {
     state.instagram = null;
     state.instagramAccounts = [];
     state.reelAccountTargets = {};
+    state.reelCaptionTemplateSelections = {};
     state.captionTemplates = [];
     state.captionTemplatesLoading = false;
     state.captionTemplatesError = '';

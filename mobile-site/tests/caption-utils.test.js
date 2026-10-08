@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
   captionForAccount,
+  captionForReelUrl,
   composeCaptionWithTags,
   hasReelDraftContent,
   setCaptionForAccount,
@@ -42,6 +43,21 @@ test('automatically appends hashtag and mention blocks exactly once', () => {
   assert.equal(composeCaptionWithTags('', '#reels'), '#reels');
   assert.equal(composeCaptionWithTags('Yeni ürün\n\n#reels', '#reels'), 'Yeni ürün\n\n#reels');
   assert.equal(composeCaptionWithTags('Açıklama', ''), 'Açıklama');
+});
+
+test('uses each URL’s selected caption template and tags, falling back to the shared draft when none is selected', () => {
+  const campaign = { caption: 'Kampanya açıklaması', tags: '#kampanya @marka' };
+  const launch = { caption: 'Yeni ürün yayında', tags: '#yenilik' };
+  const templatesById = new Map([['campaign', campaign], ['launch', launch]]);
+  const selections = { abc123: 'campaign', xyz456: 'launch' };
+  const urls = [{ shortcodeKey: 'abc123' }, { shortcodeKey: 'xyz456' }];
+  const captions = urls.map((item) => captionForReelUrl('', 'Genel açıklama', '#genel', templatesById.get(selections[item.shortcodeKey])));
+  assert.deepEqual(captions, ['Kampanya açıklaması\n\n#kampanya @marka', 'Yeni ürün yayında\n\n#yenilik']);
+
+  assert.equal(captionForReelUrl('Satır açıklaması', 'Genel açıklama', '#genel', campaign), 'Kampanya açıklaması\n\n#kampanya @marka');
+  assert.equal(captionForReelUrl('', '', '', launch), 'Yeni ürün yayında\n\n#yenilik');
+  assert.equal(captionForReelUrl('Satır açıklaması', 'Genel açıklama', '#genel', null), 'Genel açıklama\n\n#genel');
+  assert.equal(captionForReelUrl('Satır açıklaması', '', '#genel', null), 'Satır açıklaması\n\n#genel');
 });
 
 test('validates template names, caption/tag lengths, and the final combined Instagram caption limit', () => {

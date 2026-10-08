@@ -34,9 +34,10 @@ test('successful queue add clears URLs but retains and persists the caption draf
   assert.doesNotMatch(successBranch, /(?:captionInput|caption-input)\.value\s*=\s*''/);
   assert.match(source, /setCaptionForAccount\(/);
   assert.match(source, /setTagsForAccount\(/);
-  assert.match(source, /composeCaptionWithTags\(/);
+  assert.match(source, /captionForReelUrl\(/);
   assert.match(source, /instagram_caption_templates/);
-  assert.match(addToQueue, /p_caption:\s*composeCaptionWithTags\(sharedCaption \|\| item\.caption, automaticTags\)/);
+  assert.match(addToQueue, /p_caption:\s*captionByShortcode\.get\(item\.shortcodeKey\)/);
+  assert.match(addToQueue, /reelCaptionTemplateSelections\[item\.shortcodeKey\]/);
   assert.match(addToQueue, /length > 2200/);
 });
 
@@ -74,8 +75,11 @@ test('each URL can target a different account and enqueue uses its own selected 
 
   assert.match(source, /id="reel-target-panel"/);
   assert.match(source, /data-reel-target-select data-shortcode-key=/);
+  assert.match(source, /data-reel-caption-template data-shortcode-key=/);
   assert.match(addToQueue, /resolveReelTargetAssignments\(parsed\.items, state\.reelAccountTargets, state\.instagram\.id\)/);
   assert.match(addToQueue, /p_instagram_account_id: targetByShortcode\.get\(item\.shortcodeKey\)/);
+  assert.match(addToQueue, /p_caption: captionByShortcode\.get\(item\.shortcodeKey\)/);
   assert.doesNotMatch(addToQueue, /const targetInstagramAccountId/);
   assert.match(source, /reelAccountTargets:\s*\{\s*\.\.\.state\.reelAccountTargets\s*\}/);
+  assert.match(source, /reelCaptionTemplateSelections:\s*\{\s*\.\.\.state\.reelCaptionTemplateSelections\s*\}/);
 });

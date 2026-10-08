@@ -53,6 +53,11 @@ export function composeCaptionWithTags(caption, tags) {
   return `${base}\n\n${suffix}`;
 }
 
+export function captionForReelUrl(itemCaption, sharedCaption, sharedTags, selectedTemplate = null) {
+  if (selectedTemplate) return composeCaptionWithTags(selectedTemplate.caption, selectedTemplate.tags);
+  return composeCaptionWithTags(sharedCaption || itemCaption, sharedTags);
+}
+
 export function validateCaptionTemplate(name, caption, tags = '') {
   const cleanName = String(name ?? '').trim();
   const cleanCaption = String(caption ?? '').trim();
