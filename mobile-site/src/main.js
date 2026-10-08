@@ -548,6 +548,7 @@ function consumeInstagramCallback() {
     status.dataset.state = type;
   }
   toast(message, type);
+  requestAnimationFrame(() => document.querySelector('#instagram-account-card')?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
 }
 
 async function addToQueue(form) {
