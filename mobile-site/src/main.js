@@ -8,7 +8,7 @@ const root = document.querySelector('#app');
 const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
 });
-const state = { session: null, rows: [], instagram: null, instagramAccounts: [], preferNewestInstagramAccount: false, filter: 'all', theme: localStorage.getItem('reelflow-theme') || 'dark', installPrompt: null, busy: false };
+const state = { session: null, rows: [], instagram: null, instagramAccounts: [], preferNewestInstagramAccount: false, instagramConnectionMessage: null, filter: 'all', theme: localStorage.getItem('reelflow-theme') || 'dark', installPrompt: null, busy: false };
 let instagramAccountLoadGeneration = 0;
 let idleQueueRefreshTicks = 0;
 document.documentElement.dataset.theme = state.theme;
@@ -391,6 +391,11 @@ function renderInstagramAccount() {
     event.stopPropagation();
     if (!connectButton.disabled) void connectInstagram();
   });
+  const oauthStatus = card.querySelector('#instagram-connect-status');
+  if (oauthStatus && state.instagramConnectionMessage) {
+    oauthStatus.textContent = state.instagramConnectionMessage.message;
+    oauthStatus.dataset.state = state.instagramConnectionMessage.type;
+  }
   const addButton = document.querySelector('#add-submit');
   if (addButton) addButton.disabled = !state.instagram;
 }
@@ -421,6 +426,7 @@ async function savePublishInterval(minutes) {
 async function connectInstagram() {
   const button = document.querySelector('#instagram-connect-button');
   const status = document.querySelector('#instagram-connect-status');
+  state.instagramConnectionMessage = null;
   const setStatus = (message, type = 'info') => {
     if (!status?.isConnected) return;
     status.textContent = message;
@@ -535,6 +541,12 @@ function consumeInstagramCallback() {
     connection_failed: ['Instagram bağlantısı tamamlanamadı.', 'error'],
   };
   const [message, type] = messages[result] || ['Instagram bağlantısı tamamlanamadı.', 'error'];
+  state.instagramConnectionMessage = { message, type };
+  const status = document.querySelector('#instagram-connect-status');
+  if (status) {
+    status.textContent = message;
+    status.dataset.state = type;
+  }
   toast(message, type);
 }
 
