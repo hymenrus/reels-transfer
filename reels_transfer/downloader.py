@@ -11,7 +11,8 @@ class DownloadError(RuntimeError):
 
 
 def download_reel(
-    url: str, shortcode: str, download_dir: Path, cookies_file: Path | None = None
+    url: str, shortcode: str, download_dir: Path, cookies_file: Path | None = None,
+    max_filesize_bytes: int | None = None,
 ) -> Path:
     download_dir.mkdir(parents=True, exist_ok=True)
     options: dict[str, object] = {
@@ -26,6 +27,8 @@ def download_reel(
     }
     if cookies_file:
         options["cookiefile"] = str(cookies_file)
+    if max_filesize_bytes is not None:
+        options["max_filesize"] = max(1, int(max_filesize_bytes))
 
     try:
         with yt_dlp.YoutubeDL(options) as downloader:

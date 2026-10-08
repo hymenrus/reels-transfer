@@ -1,93 +1,83 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import {
-  MAX_ORIGINAL_VIDEO_BYTES,
-  createVideoObjectPath,
-  formatVideoFileSize,
-  isOwnedVideoObjectPath,
-  normalizedVideoMimeType,
-  resumableUploadFingerprint,
-  tusResumableEndpoint,
-  validateUploadedVideo,
-  VIDEO_STORAGE_BUCKET,
-} from '../src/uploaded-video-utils.js';
+import { MAX_ORIGINAL_VIDEO_BYTES, formatVideoFileSize, VIDEO_STORAGE_BUCKET } from '../src/uploaded-video-utils.js';
+import { parseReelLines } from '../src/url-utils.js';
 
-const migration = await readFile(new URL('../supabase/migrations/202610080005_uploaded_video_library.sql', import.meta.url), 'utf8');
+const libraryMigration = await readFile(new URL('../supabase/migrations/202610080005_uploaded_video_library.sql', import.meta.url), 'utf8');
 const safetyMigration = await readFile(new URL('../supabase/migrations/202610080006_private_video_safety.sql', import.meta.url), 'utf8');
+const importMigration = await readFile(new URL('../supabase/migrations/202610080007_instagram_url_archive_import.sql', import.meta.url), 'utf8');
+const recoveryMigration = await readFile(new URL('../supabase/migrations/202610080008_recover_stale_video_imports.sql', import.meta.url), 'utf8');
+const hardeningMigration = await readFile(new URL('../supabase/migrations/202610080009_private_url_import_hardening.sql', import.meta.url), 'utf8');
 const schema = await readFile(new URL('../supabase/schema.sql', import.meta.url), 'utf8');
 const app = await readFile(new URL('../src/main.js', import.meta.url), 'utf8');
 const worker = await readFile(new URL('../../reels_transfer/github_worker.py', import.meta.url), 'utf8');
+const workflow = await readFile(new URL('../../.github/workflows/process-reels.yml', import.meta.url), 'utf8');
 
-test('validates MP4/MOV originals and enforces the 50 MiB limit before upload', () => {
+ test('normalizes Instagram Reel URLs and keeps private archive size helpers', () => {
   assert.equal(MAX_ORIGINAL_VIDEO_BYTES, 50 * 1024 * 1024);
-  assert.deepEqual(validateUploadedVideo({ name: 'clip.mp4', type: 'video/mp4', size: 100 }), {
-    ok: true, mimeType: 'video/mp4', extension: 'mp4',
-  });
-  assert.equal(validateUploadedVideo({ name: 'phone.mov', type: '', size: 100 }).mimeType, 'video/quicktime');
-  assert.equal(validateUploadedVideo({ name: 'large.mp4', type: 'video/mp4', size: MAX_ORIGINAL_VIDEO_BYTES + 1 }).reason, 'file_too_large');
-  assert.equal(validateUploadedVideo({ name: 'movie.avi', type: 'video/x-msvideo', size: 100 }).reason, 'unsupported_type');
-  assert.equal(normalizedVideoMimeType({ name: 'clip.m4v', type: '' }), 'video/x-m4v');
-});
-
-test('creates private object keys under the authenticated user and supports browser TUS endpoint construction', () => {
-  const owner = '123e4567-e89b-42d3-a456-426614174000';
-  assert.equal(createVideoObjectPath(owner, 'mp4', 'upload_1234567890abcdef'), `${owner}/upload_1234567890abcdef.mp4`);
-  assert.throws(() => createVideoObjectPath(owner, '../mp4', 'upload_1234567890abcdef'));
-  assert.equal(isOwnedVideoObjectPath(`${owner}/clip.mp4`, owner), true);
-  assert.equal(isOwnedVideoObjectPath('other-user/clip.mp4', owner), false);
-  assert.equal(tusResumableEndpoint('https://fwscsiswefezkyfblres.supabase.co'), 'https://fwscsiswefezkyfblres.storage.supabase.co/storage/v1/upload/resumable');
-  assert.throws(() => tusResumableEndpoint('http://localhost:54321'));
-  assert.match(resumableUploadFingerprint(owner, { name: 'clip.mp4', size: 123, lastModified: 456 }), /clip\.mp4:123:456$/);
-  assert.match(formatVideoFileSize(50 * 1024 * 1024), /50/);
   assert.equal(VIDEO_STORAGE_BUCKET, 'reelflow-original-videos');
+  assert.match(formatVideoFileSize(50 * 1024 * 1024), /50/);
+  const parsed = parseReelLines('https://www.instagram.com/reel/ABC123/?igsh=one\nhttps://instagram.com/reels/abc123/\nhttps://instagram.com/reel/XYZ789/');
+  assert.equal(parsed.items.length, 2);
+  assert.equal(parsed.items[0].url, 'https://www.instagram.com/reel/ABC123/');
+  assert.equal(parsed.duplicates, 1);
+  assert.equal(parseReelLines('https://example.com/reel/ABC123').invalid.length, 1);
 });
 
-test('migration creates private per-user storage with RLS and no public bucket access', () => {
-  assert.match(migration, /INSERT INTO storage\.buckets[\s\S]*'reelflow-original-videos'[\s\S]*false[\s\S]*52428800/);
-  assert.match(migration, /CREATE TABLE IF NOT EXISTS public\.uploaded_videos/);
-  assert.match(migration, /ALTER TABLE public\.uploaded_videos ENABLE ROW LEVEL SECURITY/);
-  assert.match(migration, /storage\.foldername\(name\).*auth\.uid/s);
-  assert.match(migration, /CREATE POLICY "ReelFlow users read their private originals"/);
-  assert.match(migration, /CREATE POLICY "ReelFlow users delete only untracked or claimed originals"/);
-  assert.match(migration, /CREATE OR REPLACE FUNCTION public\.enqueue_uploaded_video/);
-  assert.match(migration, /CREATE OR REPLACE FUNCTION public\.claim_uploaded_video_cleanups/);
-  assert.match(migration, /CREATE OR REPLACE FUNCTION public\.finish_uploaded_video_cleanup/);
-  assert.doesNotMatch(migration, /CREATE POLICY[^;]+\bUSING\s*\(\s*true\s*\)/i);
+test('migrations keep originals private and add owner-isolated, retryable URL import jobs', () => {
+  assert.match(libraryMigration, /'reelflow-original-videos'[\s\S]*false[\s\S]*52428800/);
+  assert.match(libraryMigration, /CREATE TABLE IF NOT EXISTS public\.uploaded_videos/);
+  assert.match(libraryMigration, /CREATE POLICY "ReelFlow users read their private originals"/);
+  assert.match(libraryMigration, /CREATE OR REPLACE FUNCTION public\.enqueue_uploaded_video/);
   assert.match(safetyMigration, /worker_temporary_video_objects/);
-  assert.match(safetyMigration, /JOIN public\.instagram_credentials/);
   assert.match(safetyMigration, /CREATE POLICY "ReelFlow users replace only untracked originals"/);
-  const claimFunction = safetyMigration.split('CREATE OR REPLACE FUNCTION public.claim_uploaded_video_cleanup(')[1].split('$$;')[0];
-  assert.doesNotMatch(claimFunction, /UPDATE public\.reels_queue/);
-  const finishFunction = safetyMigration.split('CREATE OR REPLACE FUNCTION public.finish_uploaded_video_cleanup(')[1].split('$$;')[0];
-  assert.match(finishFunction, /SET status = 'cancelled'/);
-  assert.match(schema, /CREATE TABLE IF NOT EXISTS public\.uploaded_videos/);
+  assert.match(importMigration, /CREATE TABLE IF NOT EXISTS public\.video_import_jobs/);
+  assert.match(importMigration, /CREATE POLICY "ReelFlow users read their own video imports"/);
+  assert.match(importMigration, /instagram\\\.com\/\(reel\|reels\|p\)/);
+  assert.match(importMigration, /CREATE OR REPLACE FUNCTION public\.claim_video_import_job/);
+  assert.match(importMigration, /FOR UPDATE SKIP LOCKED/);
+  assert.match(importMigration, /CREATE OR REPLACE FUNCTION public\.finish_video_import/);
+  assert.match(importMigration, /CREATE OR REPLACE FUNCTION public\.retry_video_import/);
+  assert.match(importMigration, /GRANT EXECUTE ON FUNCTION public\.claim_video_import_job\(\) TO service_role/);
+  assert.match(recoveryMigration, /45 minutes/);
+  assert.match(recoveryMigration, /attempts >= 3/);
+  assert.match(recoveryMigration, /status = 'processing'/);
+  assert.match(hardeningMigration, /REVOKE INSERT ON public\.uploaded_videos FROM authenticated/);
+  assert.match(hardeningMigration, /DROP POLICY IF EXISTS "ReelFlow users upload originals into their private folder"/);
+  assert.match(hardeningMigration, /active_storage_path/);
+  assert.match(hardeningMigration, /p_expected_user_id IS DISTINCT FROM v_user_id/);
+  assert.match(hardeningMigration, /storage_object_still_exists/);
+  assert.match(schema, /CREATE TABLE IF NOT EXISTS public\.video_import_jobs/);
+  assert.match(schema, /45 minutes/);
 });
 
-test('PWA exposes resumable upload, account/template selection, playback, queueing and cleanup UI hooks', () => {
-  assert.match(app, /tus-js-client/);
+test('PWA archives pasted Reel URLs and shows worker progress/retry without a file chooser', () => {
   assert.match(app, /id="video-library-section"/);
-  assert.match(app, /id="video-upload-form"/);
+  assert.match(app, /id="video-import-form"/);
+  assert.match(app, /id="video-import-urls"/);
+  assert.match(app, /p_source_url: item\.url/);
+  assert.match(app, /p_expected_user_id: userId/);
+  assert.match(app, /authUserGeneration !== userGeneration/);
+  assert.match(app, /state\.uploadedVideos\.some\(\(item\) => item\.id === videoId/);
+  assert.match(app, /retry_video_import/);
+  assert.match(app, /data-action="retry-video-import"/);
   assert.match(app, /data-video-account-select/);
   assert.match(app, /data-video-template-select/);
   assert.match(app, /data-action="preview-uploaded-video"/);
   assert.match(app, /data-action="queue-uploaded-video"/);
-  assert.match(app, /data-action="delete-uploaded-video"/);
   assert.match(app, /createSignedUrl/);
-  assert.match(app, /cleanup_pending/);
-  assert.match(app, /fileAvailable = Boolean\(video\.storage_path\)/);
-  assert.match(app, /Dosya depodan kaldırıldı/);
-  assert.match(app, /'x-upsert': 'true'/);
-  assert.match(app, /removeUntrackedVideoObject/);
-  assert.match(app, /savedRow/);
+  assert.doesNotMatch(app, /type="file"|tus-js-client|video-upload-form/);
 });
 
-test('worker supports private-storage source jobs and calls cleanup only after publication is recorded', () => {
-  assert.match(worker, /uploaded_video_id/);
-  assert.match(worker, /claim_uploaded_video_cleanups/);
-  assert.match(worker, /finish_uploaded_video_cleanup/);
-  assert.match(worker, /download_uploaded_video/);
-  assert.match(worker, /public_video_url/);
-  assert.match(worker, /upload_temporary_video/);
-  assert.match(worker, /cleanup_stale_temporary_videos/);
+test('scheduled worker downloads accessible Instagram Reels into the private owner bucket', () => {
+  assert.match(worker, /claim_video_import_job/);
+  assert.match(worker, /_canonical_import_url/);
+  assert.match(worker, /download_reel\(\s*canonical_url/);
+  assert.match(worker, /upload_imported_video/);
+  assert.match(worker, /finish_video_import/);
+  assert.match(worker, /fail_video_import/);
+  assert.match(worker, /reelflow-original-videos/);
+  assert.match(workflow, /MAX_VIDEO_IMPORTS_PER_RUN: '1'/);
+  assert.match(workflow, /one queued Reel and one archive URL/);
 });

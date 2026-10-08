@@ -50,6 +50,7 @@ class SupabaseQueue:
         self.queue_url = base + "/reels_queue"
         self.accounts_url = base + "/instagram_accounts"
         self.credentials_url = base + "/instagram_credentials"
+        self.video_import_jobs_url = base + "/video_import_jobs"
         self.rpc_url = base + "/rpc"
         self.storage_url = self.project_url + "/storage/v1"
         self.temporary_video_objects_url = base + "/worker_temporary_video_objects"
@@ -496,6 +497,209 @@ class SupabaseQueue:
             raise QueueApiError(f"Yayın durumu Supabase'e kaydedilemedi: HTTP {response.status_code}")
         return response.json() is True
 
+    def claim_video_import_job(self) -> dict[str, Any] | None:
+        try:
+            response = self.session.post(self.rpc_url + "/claim_video_import_job", json={}, timeout=30)
+        except requests.RequestException as exc:
+            raise QueueApiError("Instagram URL arşiv kuyruğuna erişilemedi (ağ hatası).") from exc
+        rows = self._rows(response, "Instagram URL arşiv kuyruğu")
+        return rows[0] if rows else None
+
+    def update_video_import(self, job: dict[str, Any], **fields: Any) -> bool:
+        user_id = str(job.get("user_id") or "")
+        job_id = str(job.get("id") or "")
+        if not user_id or not job_id:
+            raise QueueApiError("Video içe aktarma kaydında sahip veya kimlik bulunamadı.")
+        fields.setdefault("updated_at", datetime.now(timezone.utc).isoformat())
+        params = urlencode({"id": f"eq.{job_id}", "user_id": f"eq.{user_id}", "status": "eq.processing"})
+        try:
+            response = self.session.patch(
+                self.video_import_jobs_url + "?" + params, json=fields,
+                headers={"Prefer": "return=representation"}, timeout=30,
+            )
+        except requests.RequestException as exc:
+            raise QueueApiError("Video arşiv durumu güncellenemedi (ağ hatası).") from exc
+        return bool(self._rows(response, "video arşiv durumu"))
+
+    @staticmethod
+    def valid_import_object_path(job: dict[str, Any], storage_path: str) -> bool:
+        try:
+            owner = str(UUID(str(job.get("user_id") or "")))
+            job_id = UUID(str(job.get("id") or ""))
+        except ValueError:
+            return False
+        return bool(re.fullmatch(
+            rf"{re.escape(owner)}/import-{job_id.hex}\.(?:mp4|mov|m4v)", storage_path,
+        ))
+
+    def pending_video_import_objects(self, limit: int = 100) -> list[dict[str, Any]]:
+        params = urlencode({
+            "select": "id,user_id,shortcode,status,active_storage_path",
+            "active_storage_path": "not.is.null",
+            "status": "in.(queued,failed)",
+            "order": "updated_at.asc",
+            "limit": str(max(1, min(limit, 200))),
+        })
+        try:
+            response = self.session.get(self.video_import_jobs_url + "?" + params, timeout=30)
+        except requests.RequestException as exc:
+            raise QueueApiError("Kayıtsız video nesneleri taranamadı (ağ hatası).") from exc
+        return self._rows(response, "kayıtsız video nesneleri")
+
+    def clear_inactive_video_import_path(self, job: dict[str, Any]) -> bool:
+        job_id = str(job.get("id") or "")
+        user_id = str(job.get("user_id") or "")
+        if not job_id or not user_id:
+            raise QueueApiError("Video aktarım temizleme kaydında sahip veya kimlik yok.")
+        params = urlencode({
+            "id": f"eq.{job_id}", "user_id": f"eq.{user_id}",
+            "status": "in.(queued,failed)",
+        })
+        try:
+            response = self.session.patch(
+                self.video_import_jobs_url + "?" + params,
+                json={"active_storage_path": None, "updated_at": datetime.now(timezone.utc).isoformat()},
+                headers={"Prefer": "return=representation"}, timeout=30,
+            )
+        except requests.RequestException as exc:
+            raise QueueApiError("Temizlenen video yolu kaydedilemedi (ağ hatası).") from exc
+        return bool(self._rows(response, "temizlenen video yolu"))
+
+    def cleanup_unregistered_video_import_objects(self, limit: int = 100) -> int:
+        cleaned = 0
+        for job in self.pending_video_import_objects(limit):
+            storage_path = str(job.get("active_storage_path") or "")
+            if not self.valid_import_object_path(job, storage_path):
+                LOGGER.error("Geçersiz URL aktarım nesnesi yolu temizlenmek üzere reddedildi.")
+                continue
+            try:
+                metadata = self.video_import_metadata_for_path(storage_path)
+                if metadata:
+                    if str(metadata.get("user_id") or "") != str(job.get("user_id") or ""):
+                        LOGGER.error("URL aktarım nesnesi sahibi metadata ile eşleşmedi; silinmedi.")
+                        continue
+                    # A committed library row is authoritative; never delete its object here.
+                    if self.clear_inactive_video_import_path(job):
+                        cleaned += 1
+                    continue
+                self.delete_uploaded_video_object(storage_path)
+                if self.clear_inactive_video_import_path(job):
+                    cleaned += 1
+            except QueueApiError:
+                LOGGER.exception("Başarısız/yarım kalmış URL aktarım nesnesi temizlenemedi; sonraki turda yeniden denenecek.")
+        return cleaned
+
+    def upload_imported_video(self, job: dict[str, Any], video_path: Path) -> dict[str, Any]:
+        user_id = str(job.get("user_id") or "")
+        shortcode = str(job.get("shortcode") or "")
+        try:
+            user_id = str(UUID(user_id))
+            job_id = UUID(str(job.get("id") or ""))
+        except ValueError as exc:
+            raise QueueApiError("Instagram URL arşivinin sahibi veya aktarım kimliği geçersiz.") from exc
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", shortcode):
+            raise QueueApiError("Instagram Reel kodu geçersiz.")
+        if not video_path.is_file():
+            raise QueueApiError("Instagram’dan indirilen video dosyası bulunamadı.")
+        suffix = video_path.suffix.lower()
+        mime_type = {".mp4": "video/mp4", ".mov": "video/quicktime", ".m4v": "video/x-m4v"}.get(suffix)
+        if not mime_type:
+            raise QueueApiError("Instagram’dan alınan video MP4/MOV biçiminde değil.")
+        size_bytes = video_path.stat().st_size
+        if size_bytes < 1 or size_bytes > 50 * 1024 * 1024:
+            raise QueueApiError("Instagram’dan indirilen video 50 MB depolama sınırını aşıyor.")
+        storage_path = f"{user_id}/import-{job_id.hex}{suffix}"
+        job["active_storage_path"] = storage_path
+        if not self.update_video_import(job, active_storage_path=storage_path):
+            raise QueueApiError("Özel arşiv dosya yolu güvenli biçimde kaydedilemedi.")
+        object_url = f"{self.storage_url}/object/reelflow-original-videos/{quote(storage_path, safe='/')}"
+        try:
+            with video_path.open("rb") as handle:
+                response = self.session.post(
+                    object_url, data=handle,
+                    headers={"Content-Type": mime_type, "x-upsert": "true"},
+                    timeout=(15, 900),
+                )
+        except (OSError, requests.RequestException) as exc:
+            self._remove_unregistered_import_object(job, storage_path)
+            raise QueueApiError(f"Video özel bulut arşivine yüklenemedi: {type(exc).__name__}.") from exc
+        if not response.ok:
+            self._remove_unregistered_import_object(job, storage_path)
+            raise QueueApiError(f"Video özel bulut arşivine yüklenemedi: HTTP {response.status_code}.")
+        return {
+            "storage_path": storage_path,
+            "mime_type": mime_type,
+            "size_bytes": size_bytes,
+            "original_filename": f"instagram-{shortcode}{suffix}",
+        }
+
+    def _remove_unregistered_import_object(self, job: dict[str, Any], storage_path: str) -> bool:
+        try:
+            self.delete_uploaded_video_object(storage_path)
+        except QueueApiError:
+            LOGGER.exception("Kayıtsız Instagram URL aktarım dosyası temizlenemedi.")
+            return False
+        try:
+            if not self.update_video_import(job, active_storage_path=None):
+                raise QueueApiError("Temizleme yolu import kaydında sıfırlanamadı.")
+            job["active_storage_path"] = None
+            return True
+        except QueueApiError:
+            LOGGER.exception("Silinen Instagram URL dosyasının yolu import kaydında sıfırlanamadı.")
+            return False
+
+    def finish_video_import(self, job: dict[str, Any], metadata: dict[str, Any]) -> str:
+        payload = {
+            "p_import_id": job.get("id"),
+            "p_storage_path": metadata["storage_path"],
+            "p_original_filename": metadata["original_filename"],
+            "p_mime_type": metadata["mime_type"],
+            "p_size_bytes": metadata["size_bytes"],
+        }
+        try:
+            response = self.session.post(self.rpc_url + "/finish_video_import", json=payload, timeout=30)
+        except requests.RequestException as exc:
+            raise QueueApiError("Video arşiv kaydı tamamlanamadı (ağ hatası).") from exc
+        if not response.ok:
+            raise QueueApiError(f"Video arşiv kaydı tamamlanamadı: HTTP {response.status_code}.")
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise QueueApiError("Video arşiv kaydı yanıtı geçersiz.") from exc
+        if isinstance(data, str):
+            job["active_storage_path"] = None
+            return data
+        if isinstance(data, list) and data and isinstance(data[0], dict):
+            job["active_storage_path"] = None
+            return str(data[0].get("finish_video_import") or data[0].get("id") or "")
+        job["active_storage_path"] = None
+        return str(data.get("id") or "") if isinstance(data, dict) else ""
+
+    def video_import_metadata_for_path(self, storage_path: str) -> dict[str, Any] | None:
+        params = urlencode({
+            "select": "id,user_id,storage_path,source_shortcode,original_filename,mime_type,size_bytes,cleanup_pending",
+            "storage_path": f"eq.{storage_path}",
+            "limit": "1",
+        })
+        try:
+            response = self.session.get(self.project_url + "/rest/v1/uploaded_videos?" + params, timeout=30)
+        except requests.RequestException as exc:
+            raise QueueApiError("Video arşiv sonucu doğrulanamadı (ağ hatası).") from exc
+        rows = self._rows(response, "video arşiv sonucu")
+        return rows[0] if rows else None
+
+    def fail_video_import(self, job: dict[str, Any], message: str) -> None:
+        try:
+            response = self.session.post(
+                self.rpc_url + "/fail_video_import",
+                json={"p_import_id": job.get("id"), "p_error_message": str(message)[:1000]},
+                timeout=30,
+            )
+        except requests.RequestException as exc:
+            raise QueueApiError("Başarısız video aktarım durumu kaydedilemedi (ağ hatası).") from exc
+        if not response.ok:
+            raise QueueApiError(f"Başarısız video aktarım durumu kaydedilemedi: HTTP {response.status_code}.")
+
 
 def _publisher(settings: Settings, access_token: str, ig_user_id: str) -> InstagramPublisher:
     return InstagramPublisher(
@@ -694,6 +898,156 @@ def _cleanup_stale_temporary_video_objects(queue: Any) -> None:
         LOGGER.exception("Süre aşımı dolan özel geçici video temizliği başlatılamadı.")
 
 
+def _cleanup_unregistered_video_import_objects(queue: Any, context: str) -> None:
+    cleanup = getattr(queue, "cleanup_unregistered_video_import_objects", None)
+    if not callable(cleanup):
+        return
+    try:
+        cleanup()
+    except QueueApiError:
+        LOGGER.exception("%s", context)
+
+
+def _canonical_import_url(job: dict[str, Any]) -> str:
+    shortcode = str(job.get("shortcode") or "")
+    source_url = str(job.get("source_url") or "")
+    parsed = urlsplit(source_url)
+    host = (parsed.hostname or "").lower()
+    match = re.fullmatch(r"/(?:reel|reels|p)/([A-Za-z0-9_-]{1,64})/?", parsed.path, flags=re.IGNORECASE)
+    if (parsed.scheme != "https" or host not in {"instagram.com", "www.instagram.com"}
+            or parsed.username or parsed.password or parsed.port not in {None, 443}
+            or parsed.query or parsed.fragment or not match
+            or match.group(1).lower() != shortcode.lower()):
+        raise DownloadError("Instagram Reel bağlantısı geçersiz; bağlantıyı kontrol edip tekrar dene.")
+    return f"https://www.instagram.com/reel/{match.group(1)}/"
+
+
+def _video_import_error(exc: Exception, source_url: str) -> str:
+    message = str(exc).replace(source_url, "Instagram Reel bağlantısı")
+    if "50 MB" in message or "52428800" in message:
+        return "Instagram’dan indirilen video 50 MB sınırını aşıyor; farklı bir Reel URL’si dene."
+    if isinstance(exc, DownloadError):
+        return "Instagram videosu indirilemedi. Reel herkese açık ve erişilebilir mi kontrol et; özel veya kısıtlı Reels indirilemeyebilir."
+    return message[:1000] or "Instagram videosu bulut arşivine kaydedilemedi."
+
+
+def _process_video_imports(queue: Any, settings: Settings, limit: int = 1) -> tuple[int, int]:
+    claim = getattr(queue, "claim_video_import_job", None)
+    if not callable(claim):
+        return 0, 0
+    saved = failed = 0
+    for _ in range(max(0, min(int(limit), 5))):
+        try:
+            job = claim()
+        except QueueApiError:
+            LOGGER.exception("Instagram URL arşiv kuyruğundan iş alınamadı.")
+            break
+        if not job:
+            break
+        shortcode = str(job.get("shortcode") or "bilinmeyen")
+        source_url = str(job.get("source_url") or "")
+        source_file: Path | None = None
+        storage_path = str(job.get("active_storage_path") or "") or None
+        try:
+            if storage_path:
+                if not queue.valid_import_object_path(job, storage_path):
+                    raise QueueApiError("Önceki URL aktarımındaki nesne yolu güvenli değil.")
+                persisted = queue.video_import_metadata_for_path(storage_path)
+                if persisted:
+                    if str(persisted.get("user_id") or "") != str(job.get("user_id") or ""):
+                        raise QueueApiError("Önceki URL aktarım nesnesinin sahibi uyuşmuyor.")
+                    recovered = {
+                        "storage_path": storage_path,
+                        "original_filename": persisted.get("original_filename"),
+                        "mime_type": persisted.get("mime_type"),
+                        "size_bytes": persisted.get("size_bytes"),
+                    }
+                    video_id = queue.finish_video_import(job, recovered)
+                    if video_id:
+                        job["active_storage_path"] = None
+                        storage_path = None
+                        saved += 1
+                        continue
+                    raise QueueApiError("Önceki URL aktarımı arşiv kaydıyla eşitlenemedi.")
+                queue.delete_uploaded_video_object(storage_path)
+                if not queue.update_video_import(job, active_storage_path=None):
+                    raise QueueApiError("Önceki URL aktarım dosyası silindi fakat temizleme yolu sıfırlanamadı.")
+                job["active_storage_path"] = None
+                storage_path = None
+            canonical_url = _canonical_import_url(job)
+            try:
+                queue.update_video_import(job, progress=12, stage="Instagram Reel indiriliyor")
+            except QueueApiError:
+                LOGGER.warning("URL arşiv ilerlemesi kaydedilemedi (%s).", shortcode)
+            source_file = download_reel(
+                canonical_url, shortcode, settings.download_dir, settings.cookies_file,
+                max_filesize_bytes=50 * 1024 * 1024,
+            )
+            if not source_file.is_file() or source_file.suffix.lower() not in {".mp4", ".mov", ".m4v"}:
+                raise DownloadError("Instagram’dan alınan video MP4/MOV biçiminde değil; farklı bir URL dene.")
+            size_bytes = source_file.stat().st_size
+            if size_bytes < 1 or size_bytes > 50 * 1024 * 1024:
+                raise DownloadError("Instagram’dan indirilen video 50 MB depolama sınırını aşıyor.")
+            try:
+                queue.update_video_import(job, progress=68, stage="Video özel bulut arşivine yükleniyor")
+            except QueueApiError:
+                LOGGER.warning("URL arşiv ilerlemesi kaydedilemedi (%s).", shortcode)
+            metadata = queue.upload_imported_video(job, source_file)
+            storage_path = str(metadata["storage_path"])
+            try:
+                queue.update_video_import(job, progress=92, stage="Bulut arşiv kaydı tamamlanıyor")
+            except QueueApiError:
+                LOGGER.warning("URL arşiv ilerlemesi kaydedilemedi (%s).", shortcode)
+            video_id = queue.finish_video_import(job, metadata)
+            if not video_id:
+                raise QueueApiError("Özel bulut video kaydı boş yanıt verdi.")
+            job["active_storage_path"] = None
+            storage_path = None
+            saved += 1
+            LOGGER.info("Instagram Reel özel bulut arşivine kaydedildi: %s", shortcode)
+        except (DownloadError, MediaError, QueueApiError, ValueError, OSError, requests.RequestException) as exc:
+            storage_path = str(job.get("active_storage_path") or storage_path or "") or None
+            if storage_path:
+                metadata_check_failed = False
+                try:
+                    persisted = queue.video_import_metadata_for_path(storage_path)
+                except QueueApiError:
+                    persisted = None
+                    metadata_check_failed = True
+                    LOGGER.exception("Belirsiz URL arşiv kaydı doğrulanamadı (%s). Dosyayı koruyoruz.", shortcode)
+                if metadata_check_failed:
+                    pass
+                elif persisted:
+                    try:
+                        queue.finish_video_import(job, {
+                            "storage_path": storage_path,
+                            "original_filename": persisted.get("original_filename"),
+                            "mime_type": persisted.get("mime_type"),
+                            "size_bytes": persisted.get("size_bytes"),
+                        })
+                    except QueueApiError:
+                        LOGGER.exception("Kaydedilmiş URL aktarımı sonlandırılamadı (%s).", shortcode)
+                        continue
+                    job["active_storage_path"] = None
+                    storage_path = None
+                    saved += 1
+                    LOGGER.info("Instagram Reel özel bulut arşivine kaydedildi (yanıt yeniden doğrulandı): %s", shortcode)
+                    continue
+                elif queue.valid_import_object_path(job, storage_path):
+                    queue._remove_unregistered_import_object(job, storage_path)
+                storage_path = str(job.get("active_storage_path") or "") or None
+            message = _video_import_error(exc, source_url)
+            try:
+                queue.fail_video_import(job, message)
+            except QueueApiError:
+                LOGGER.exception("URL arşiv hatası Supabase'e kaydedilemedi (%s).", shortcode)
+            LOGGER.warning("Instagram URL arşiv aktarımı başarısız (%s): %s", shortcode, message)
+            failed += 1
+        finally:
+            _cleanup(source_file)
+    return saved, failed
+
+
 def run_worker() -> dict[str, int]:
     project_url = os.getenv("SUPABASE_URL", "").strip()
     service_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
@@ -703,14 +1057,26 @@ def run_worker() -> dict[str, int]:
     settings = load_settings(require_account_credentials=False)
     if settings.api_mode != "instagram_login":
         raise ConfigError("Kullanıcıya ait Instagram hesaplarını yayınlamak için IG_API_MODE=instagram_login olmalı.")
+    try:
+        max_video_imports = int(os.getenv("MAX_VIDEO_IMPORTS_PER_RUN", "1"))
+    except ValueError as exc:
+        raise ConfigError("MAX_VIDEO_IMPORTS_PER_RUN 0 ile 5 arasında sayı olmalı.") from exc
+    if not 0 <= max_video_imports <= 5:
+        raise ConfigError("MAX_VIDEO_IMPORTS_PER_RUN 0 ile 5 arasında olmalı.")
     ensure_tools_available()
-    if settings.max_posts_per_run <= 0:
-        LOGGER.info("MAX_POSTS_PER_RUN sıfır; worker bu turda yayın yapmayacak.")
-        return {"published": 0, "failed": 0, "skipped": 0}
 
     queue = SupabaseQueue(project_url, service_key)
     _cleanup_uploaded_video_objects(queue, "Önceki yayınlardan kalan özel video temizliği başlatılamadı.")
     _cleanup_stale_temporary_video_objects(queue)
+    _cleanup_unregistered_video_import_objects(queue, "Önceki URL arşiv aktarımından kalan nesneler temizlenemedi.")
+    imports_saved, imports_failed = _process_video_imports(queue, settings, max_video_imports)
+    _cleanup_unregistered_video_import_objects(queue, "URL arşiv aktarımından kalan nesneler temizlenemedi.")
+    if settings.max_posts_per_run <= 0:
+        LOGGER.info("MAX_POSTS_PER_RUN sıfır; bu turda Reel yayınlanmayacak.")
+        result = {"published": 0, "failed": 0, "skipped": 0}
+        if imports_saved or imports_failed:
+            result.update({"video_imports_saved": imports_saved, "video_imports_failed": imports_failed})
+        return result
     target_reel_id = os.getenv("TARGET_REEL_ID", "").strip()
     if target_reel_id:
         try:
@@ -886,13 +1252,20 @@ def run_worker() -> dict[str, int]:
         LOGGER.exception("Instagram medya eşitleme turu başlatılamadı.")
 
     _cleanup_uploaded_video_objects(queue, "Yayın sonrası özel video temizliği tamamlanamadı.")
-    return {"published": published, "failed": failed, "skipped": skipped}
+    result = {"published": published, "failed": failed, "skipped": skipped}
+    if imports_saved or imports_failed:
+        result.update({"video_imports_saved": imports_saved, "video_imports_failed": imports_failed})
+    return result
 
 
 def main() -> int:
     logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
     result = run_worker()
-    LOGGER.info("Tur tamamlandı: %d yayınlandı, %d başarısız, %d atlandı.", result["published"], result["failed"], result["skipped"])
+    LOGGER.info(
+        "Tur tamamlandı: %d yayınlandı, %d başarısız, %d atlandı, %d URL arşive kaydedildi, %d URL indirmesi başarısız.",
+        result["published"], result["failed"], result["skipped"],
+        result.get("video_imports_saved", 0), result.get("video_imports_failed", 0),
+    )
     return 0
 
 

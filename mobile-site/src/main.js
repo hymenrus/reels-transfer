@@ -1,21 +1,22 @@
 import { createClient } from '@supabase/supabase-js';
-import * as tus from 'tus-js-client';
 import { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, PUBLISHER_SETUP_READY } from './config.js';
 import { estimateQueueEta, pruneReelAccountTargets, pruneReelCaptionTemplateSelections, resolveReelTargetAssignments, selectInstagramAccount, setReelAccountTarget } from './queue-utils.js';
 import { captionForAccount, captionForReelUrl, hasReelDraftContent, setCaptionForAccount, setTagsForAccount, tagsForAccount, validateCaptionTemplate } from './caption-utils.js';
 import { parseReelLines } from './url-utils.js';
-import { createVideoObjectPath, formatVideoFileSize, isOwnedVideoObjectPath, normalizedVideoMimeType, resumableUploadFingerprint, tusResumableEndpoint, validateUploadedVideo, VIDEO_STORAGE_BUCKET } from './uploaded-video-utils.js';
+import { formatVideoFileSize, VIDEO_STORAGE_BUCKET } from './uploaded-video-utils.js';
 import './styles.css';
 
 const root = document.querySelector('#app');
 const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
 });
-const state = { session: null, rows: [], instagram: null, instagramAccounts: [], reelAccountTargets: {}, reelCaptionTemplateSelections: {}, captionTemplates: [], captionTemplatesLoading: false, captionTemplatesError: '', selectedCaptionTemplateId: '', uploadedVideos: [], uploadedVideosLoading: false, uploadedVideosError: '', uploadedVideoDrafts: {}, uploadedVideoDraftsUserId: '', activeTusUpload: null, videoUploadProgress: null, videoLibraryFilter: '', preferNewestInstagramAccount: false, instagramConnectionMessage: null, filter: 'all', theme: localStorage.getItem('reelflow-theme') || 'dark', installPrompt: null, busy: false };
+const state = { session: null, rows: [], instagram: null, instagramAccounts: [], reelAccountTargets: {}, reelCaptionTemplateSelections: {}, captionTemplates: [], captionTemplatesLoading: false, captionTemplatesError: '', selectedCaptionTemplateId: '', uploadedVideos: [], videoImports: [], uploadedVideosLoading: false, uploadedVideosError: '', uploadedVideoDrafts: {}, uploadedVideoDraftsUserId: '', videoImportBusy: false, videoLibraryFilter: '', preferNewestInstagramAccount: false, instagramConnectionMessage: null, filter: 'all', theme: localStorage.getItem('reelflow-theme') || 'dark', installPrompt: null, busy: false };
 let instagramAccountLoadGeneration = 0;
 let captionTemplateLoadGeneration = 0;
 let videoLibraryLoadGeneration = 0;
 let idleQueueRefreshTicks = 0;
+let videoImportRefreshTicks = 0;
+let authUserGeneration = 0;
 document.documentElement.dataset.theme = state.theme;
 
 const icon = (name, size = 20) => {
@@ -57,7 +58,6 @@ function fmtDate(value) {
 }
 const REEL_DRAFT_STORAGE_PREFIX = 'reelflow-draft-v1';
 const VIDEO_DRAFT_STORAGE_PREFIX = 'reelflow-video-drafts-v1';
-const VIDEO_TUS_TARGET_PREFIX = 'reelflow-video-tus-target-v1';
 function reelDraftStorageKey() {
   const userId = state.session?.user?.id;
   return userId ? `${REEL_DRAFT_STORAGE_PREFIX}:${userId}` : null;
@@ -251,15 +251,16 @@ function renderShell() {
           </section>
           <section class="panel video-library-panel" id="video-library-section">
             <div class="panel-heading"><div><span class="eyebrow">ÖZEL BULUT ARŞİVİ</span><h2>Video arşivi <span id="video-library-count" class="queue-count">0</span></h2></div><span class="heading-icon">${icon('play', 19)}</span></div>
-            <p class="panel-copy">Orijinal MP4/MOV videolarını telefonuna indirmeden sakla ve oynat. Dosyalar yalnızca senin ReelFlow hesabına açıktır; başarılı yayınlardan sonra kuyruk kullanımları bitince depolamadan otomatik kaldırılır.</p>
+            <p class="panel-copy">Instagram Reel bağlantısını ekle; ReelFlow videoyu bulut işçisiyle özel arşivine indirir. Telefona indirmeden oynatabilir, istediğin zaman kuyruğa gönderebilirsin.</p>
             <div id="video-library-quota" class="video-library-quota">Supabase Free kotası: proje genelinde 1 GB · dosya başına en fazla 50 MB.</div>
-            <form id="video-upload-form" class="video-upload-form">
-              <label for="video-upload-files">Telefondan veya bilgisayardan video seç <span class="muted">(MP4 / MOV, en fazla 50 MB)</span></label>
-              <input id="video-upload-files" type="file" accept=".mp4,.mov,.m4v,video/mp4,video/quicktime,video/x-m4v" multiple required />
-              <small class="video-upload-note">Yükleme TUS protokolüyle parçalara ayrılır; bağlantı kesilirse aynı dosyayı yeniden seçerek devam edebilirsin. Yükleme için Wi‑Fi önerilir.</small>
-              <div id="video-upload-progress" class="video-upload-progress" hidden><span id="video-upload-progress-label"></span><progress id="video-upload-progress-bar" max="100" value="0"></progress></div>
-              <button class="button button-primary" type="submit" id="video-upload-submit">${icon('plus', 17)} Arşive yükle</button>
+            <form id="video-import-form" class="video-import-form">
+              <label for="video-import-urls">Arşive kaydedilecek Instagram Reel bağlantıları</label>
+              <textarea id="video-import-urls" rows="3" required placeholder="Her satıra bir Instagram Reel URL’si yapıştır\nhttps://www.instagram.com/reel/…/"></textarea>
+              <small class="video-upload-note">Bağlantıları bulut işçisi işler; herkese açık ve erişilebilir Reels videoları özel arşive indirilir. Dosyalar en fazla 50 MB olabilir. Bazı Instagram bağlantıları erişim kısıtı nedeniyle indirilemeyebilir.</small>
+              <label class="rights-check video-import-rights"><input id="video-import-rights" type="checkbox" /><span>Bu videoları saklama ve paylaşma hakkım var veya izin aldım.</span></label>
+              <button class="button button-primary" type="submit" id="video-import-submit">${icon('plus', 17)} Buluta kaydet</button>
             </form>
+            <div id="video-import-status-list" class="video-import-status-list" aria-live="polite"></div>
             <div id="video-library-list" class="video-library-list"><div class="loading-row"><span class="spinner"></span> Video arşivi yükleniyor…</div></div>
           </section>
           <section class="panel queue-panel" id="queue-section">
@@ -601,22 +602,51 @@ async function loadUploadedVideos(silent = false) {
   state.uploadedVideosLoading = true;
   state.uploadedVideosError = '';
   renderUploadedVideos();
-  const { data, error } = await supabase.from('uploaded_videos')
-    .select('id,user_id,original_filename,storage_path,mime_type,size_bytes,cleanup_pending,created_at')
-    .eq('user_id', userId)
-    .order('created_at', { ascending: false })
-    .limit(100);
+  const [videoResult, importResult] = await Promise.all([
+    supabase.from('uploaded_videos')
+      .select('id,user_id,original_filename,storage_path,mime_type,size_bytes,cleanup_pending,created_at,source_shortcode')
+      .eq('user_id', userId).order('created_at', { ascending: false }).limit(100),
+    supabase.from('video_import_jobs')
+      .select('id,user_id,shortcode,source_url,status,progress,stage,error_message,created_at')
+      .eq('user_id', userId).in('status', ['queued', 'processing', 'failed'])
+      .order('created_at', { ascending: false }).limit(50),
+  ]);
   if (generation !== videoLibraryLoadGeneration || state.session?.user?.id !== userId) return;
   state.uploadedVideosLoading = false;
-  if (error) {
+  if (videoResult.error || importResult.error) {
     state.uploadedVideosError = 'Özel video arşivi yüklenemedi. Bağlantını kontrol edip yenile.';
     state.uploadedVideos = [];
+    state.videoImports = [];
     if (!silent) toast(state.uploadedVideosError, 'error');
   } else {
-    state.uploadedVideos = (Array.isArray(data) ? data : []).filter((video) => video.storage_path && !video.cleanup_pending);
+    state.uploadedVideos = (Array.isArray(videoResult.data) ? videoResult.data : []).filter((video) => video.storage_path && !video.cleanup_pending);
+    state.videoImports = Array.isArray(importResult.data) ? importResult.data : [];
   }
   renderUploadedVideos();
   renderQueue();
+}
+
+function renderVideoImportStatuses() {
+  const holder = document.querySelector('#video-import-status-list');
+  if (!holder) return;
+  const activeCount = state.videoImports.filter((job) => ['queued', 'processing'].includes(job.status)).length;
+  if (!state.videoImports.length) {
+    holder.innerHTML = '';
+    return;
+  }
+  holder.innerHTML = state.videoImports.map((job) => {
+    const status = job.status === 'queued' ? 'Bulut kuyruğunda' : job.status === 'processing' ? 'Instagram’dan indiriliyor' : 'İndirme tamamlanamadı';
+    const detail = job.status === 'failed'
+      ? (job.error_message || 'Bu bağlantıdan video alınamadı. Bağlantıyı kontrol edip tekrar deneyebilirsin.')
+      : job.status === 'queued'
+        ? 'Bulut işçisi sıradaki turunda başlatır.'
+        : `${Math.max(0, Math.min(100, Number(job.progress || 0)))}% · ${job.stage || 'Video işleniyor'}`;
+    return `<article class="video-import-status ${job.status === 'failed' ? 'is-failed' : ''}"><div><strong>/${escapeHtml(job.shortcode)} · ${escapeHtml(status)}</strong><small>${escapeHtml(detail)}</small></div>${job.status === 'failed' ? `<button type="button" class="mini-button" data-action="retry-video-import" data-id="${escapeHtml(job.id)}">Tekrar dene</button>` : '<span class="video-import-spinner" aria-hidden="true"></span>'}</article>`;
+  }).join('');
+  const navCount = document.querySelector('#video-nav-count');
+  const count = document.querySelector('#video-library-count');
+  if (navCount) navCount.textContent = String(state.uploadedVideos.length + activeCount);
+  if (count) count.textContent = String(state.uploadedVideos.length + activeCount);
 }
 
 function renderUploadedVideos() {
@@ -627,13 +657,14 @@ function renderUploadedVideos() {
     ? state.instagram.id
     : connected[0]?.id || '';
   const totalBytes = state.uploadedVideos.reduce((sum, video) => sum + Number(video.size_bytes || 0), 0);
+  const activeImports = state.videoImports.filter((job) => ['queued', 'processing'].includes(job.status)).length;
   const quota = document.querySelector('#video-library-quota');
   const count = document.querySelector('#video-library-count');
   const navCount = document.querySelector('#video-nav-count');
-  if (quota) quota.textContent = `Arşivinde ${state.uploadedVideos.length} video · ${formatVideoFileSize(totalBytes)} · Supabase Free kotası proje genelinde 1 GB, dosya başına 50 MB ve diğer depolama kullanımlarıyla ortaktır.`;
-  if (count) count.textContent = String(state.uploadedVideos.length);
-  if (navCount) navCount.textContent = String(state.uploadedVideos.length);
-  if (state.videoUploadProgress) renderVideoUploadProgress();
+  if (quota) quota.textContent = `Arşivinde ${state.uploadedVideos.length} video · ${formatVideoFileSize(totalBytes)}${activeImports ? ` · ${activeImports} indirme sürüyor/sırada` : ''} · Supabase Free kotası proje genelinde 1 GB, dosya başına 50 MB ve diğer depolama kullanımlarıyla ortaktır.`;
+  if (count) count.textContent = String(state.uploadedVideos.length + activeImports);
+  if (navCount) navCount.textContent = String(state.uploadedVideos.length + activeImports);
+  renderVideoImportStatuses();
   if (state.uploadedVideosLoading) {
     list.innerHTML = '<div class="loading-row"><span class="spinner"></span> Video arşivi yükleniyor…</div>';
     return;
@@ -643,7 +674,7 @@ function renderUploadedVideos() {
     return;
   }
   if (!state.uploadedVideos.length) {
-    list.innerHTML = '<div class="empty-state video-library-empty"><div class="empty-art">▶</div><strong>Arşiv henüz boş</strong><p>MP4 veya MOV videonu ekle; yükleme bitince buradan oynatabilir, hesabı ve açıklama taslağını seçerek kuyruğa gönderebilirsin.</p></div>';
+    list.innerHTML = '<div class="empty-state video-library-empty"><div class="empty-art">▶</div><strong>Arşiv henüz boş</strong><p>Instagram Reel URL’sini yukarıya yapıştır. Buluta kaydedilince buradan oynatabilir, hesabı ve açıklama taslağını seçerek kuyruğa gönderebilirsin.</p></div>';
     return;
   }
 
@@ -676,212 +707,99 @@ function renderUploadedVideos() {
   }).join('');
 }
 
-function updateVideoUploadProgress(fileName, fileIndex, fileCount, percent, status = '') {
-  state.videoUploadProgress = { fileName, fileIndex, fileCount, percent, status };
-  renderVideoUploadProgress();
-}
-
-function renderVideoUploadProgress() {
-  const holder = document.querySelector('#video-upload-progress');
-  const label = document.querySelector('#video-upload-progress-label');
-  const bar = document.querySelector('#video-upload-progress-bar');
-  const progress = state.videoUploadProgress;
-  if (!holder || !label || !bar) return;
-  holder.hidden = !progress;
-  if (!progress) return;
-  label.textContent = progress.status || `${progress.fileIndex}/${progress.fileCount} · ${progress.fileName} · %${progress.percent}`;
-  bar.value = Math.max(0, Math.min(100, Number(progress.percent || 0)));
-}
-
-function tusTargetKey(userId, file) {
-  return `${VIDEO_TUS_TARGET_PREFIX}:${userId}:${encodeURIComponent(resumableUploadFingerprint(userId, file))}`;
-}
-
-function getOrCreateTusObjectPath(userId, file, validation) {
-  const key = tusTargetKey(userId, file);
-  try {
-    const existing = localStorage.getItem(key);
-    if (existing && isOwnedVideoObjectPath(existing, userId) && existing.endsWith(`.${validation.extension}`)) return existing;
-  } catch { /* Continue without resumable-target persistence if storage is unavailable. */ }
-  const randomId = (globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`).replaceAll('-', '');
-  const path = createVideoObjectPath(userId, validation.extension, randomId);
-  try { localStorage.setItem(key, path); } catch { /* TUS can still retry during this session. */ }
-  return path;
-}
-
-function clearTusTarget(userId, file) {
-  try { localStorage.removeItem(tusTargetKey(userId, file)); } catch { /* Local storage may be restricted. */ }
-}
-
-async function removeUntrackedVideoObject(objectPath, accessToken) {
-  const response = await fetch(`${SUPABASE_URL}/storage/v1/object/${VIDEO_STORAGE_BUCKET}`, {
-    method: 'DELETE',
-    headers: {
-      apikey: SUPABASE_PUBLISHABLE_KEY,
-      authorization: `Bearer ${accessToken}`,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({ prefixes: [objectPath] }),
-  });
-  if (!response.ok && response.status !== 404) throw new Error('orphan_cleanup_failed');
-}
-
-async function startTusVideoUpload(file, userId, mimeType, objectPath) {
-  const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-  if (sessionError || !session?.access_token || session.user?.id !== userId) throw new Error('session_unavailable');
-  const fingerprint = resumableUploadFingerprint(userId, file);
-  const upload = new tus.Upload(file, {
-    endpoint: tusResumableEndpoint(SUPABASE_URL),
-    headers: { authorization: `Bearer ${session.access_token}`, apikey: SUPABASE_PUBLISHABLE_KEY, 'x-upsert': 'true' },
-    chunkSize: 6 * 1024 * 1024,
-    retryDelays: [0, 1000, 3000, 5000, 10000, 20000],
-    uploadDataDuringCreation: true,
-    storeFingerprintForResuming: true,
-    removeFingerprintOnSuccess: true,
-    fingerprint: () => fingerprint,
-    metadata: { bucketName: VIDEO_STORAGE_BUCKET, objectName: objectPath, contentType: mimeType, cacheControl: '3600' },
-    onProgress(bytesUploaded, bytesTotal) {
-      const percent = bytesTotal ? Math.round((bytesUploaded / bytesTotal) * 100) : 0;
-      updateVideoUploadProgress(file.name, state.videoUploadProgress?.fileIndex || 1, state.videoUploadProgress?.fileCount || 1, percent);
-    },
-    onError(error) {
-      console.warn('Resumable video upload failed:', error?.name || 'upload error');
-    },
-  });
-  state.activeTusUpload = upload;
-  const previousUploads = await upload.findPreviousUploads();
-  if (previousUploads.length) upload.resumeFromPreviousUpload(previousUploads[0]);
-  await new Promise((resolve, reject) => {
-    upload.options.onError = (error) => reject(error || new Error('upload_failed'));
-    upload.options.onSuccess = resolve;
-    upload.start();
-  });
-  state.activeTusUpload = null;
-  return session.access_token;
-}
-
-async function uploadVideoFiles(form) {
-  if (state.activeTusUpload) {
-    toast('Başka bir video yüklemesi devam ediyor.', 'warn');
-    return;
-  }
+async function enqueueVideoImports(form) {
+  if (state.videoImportBusy) return;
   const userId = state.session?.user?.id;
-  const input = form.querySelector('#video-upload-files');
-  const files = Array.from(input?.files || []);
-  if (!userId || !files.length) {
-    toast('Önce MP4 veya MOV video dosyası seç.', 'warn');
+  const userGeneration = authUserGeneration;
+  const input = form.querySelector('#video-import-urls');
+  const rights = form.querySelector('#video-import-rights');
+  const button = form.querySelector('#video-import-submit');
+  const parsed = parseReelLines(input?.value || '');
+  if (!userId) {
+    toast('Önce ReelFlow hesabına giriş yap.', 'warn');
     return;
   }
-  const button = form.querySelector('#video-upload-submit');
-  if (button) { button.disabled = true; button.textContent = 'Yükleniyor…'; }
-  let uploaded = 0;
-  let failed = 0;
-  for (let index = 0; index < files.length; index += 1) {
-    const file = files[index];
-    const validation = validateUploadedVideo(file);
-    if (!validation.ok) {
-      failed += 1;
-      toast(validation.reason === 'file_too_large'
-        ? `${file.name}: dosya 50 MB sınırını aşıyor.`
-        : `${file.name}: MP4 veya MOV video seç.`, 'warn');
-      continue;
-    }
-    const mimeType = normalizedVideoMimeType(file);
-    const objectPath = getOrCreateTusObjectPath(userId, file, validation);
-    const { data: alreadySaved, error: lookupError } = await supabase.from('uploaded_videos')
-      .select('id,user_id,original_filename,storage_path,mime_type,size_bytes,cleanup_pending,created_at')
-      .eq('user_id', userId).eq('storage_path', objectPath).maybeSingle();
-    if (!lookupError && alreadySaved) {
-      clearTusTarget(userId, file);
-      state.uploadedVideos = [alreadySaved, ...state.uploadedVideos.filter((item) => item.id !== alreadySaved.id)].slice(0, 100);
-      renderUploadedVideos();
-      if (alreadySaved.cleanup_pending) {
-        failed += 1;
-        toast(`${file.name}: video silme işlemi sürüyor; arşiv listesini yenile.`, 'warn');
-      } else {
-        toast(`${file.name} zaten özel arşivde kayıtlı.`, 'success');
-      }
-      continue;
-    }
-    updateVideoUploadProgress(file.name, index + 1, files.length, 0, `${index + 1}/${files.length} · yükleme başlıyor`);
-    let uploadCompleted = false;
-    let metadataSaved = false;
-    let uploadAccessToken = '';
+  if (!parsed.items.length) {
+    toast(parsed.invalid[0]?.reason || 'Arşive eklemek için bir Instagram Reel URL’si gir.', 'warn');
+    return;
+  }
+  if (!rights?.checked) {
+    toast('Devam etmek için videoları saklama/paylaşma hakkını onayla.', 'warn');
+    rights?.focus();
+    return;
+  }
+  state.videoImportBusy = true;
+  if (button) { button.disabled = true; button.textContent = 'Buluta gönderiliyor…'; }
+  let added = 0;
+  let duplicate = parsed.duplicates;
+  let failed = parsed.invalid.length;
+  for (const item of parsed.items) {
+    if (authUserGeneration !== userGeneration || state.session?.user?.id !== userId) return;
+    let result;
     try {
-      uploadAccessToken = await startTusVideoUpload(file, userId, mimeType, objectPath);
-      uploadCompleted = true;
-      if (state.session?.user?.id !== userId) throw new Error('session_changed');
-      const { data, error } = await supabase.from('uploaded_videos').insert({
-        user_id: userId,
-        original_filename: String(file.name || 'video').slice(0, 255),
-        storage_path: objectPath,
-        mime_type: mimeType,
-        size_bytes: file.size,
-      }).select('id,user_id,original_filename,storage_path,mime_type,size_bytes,cleanup_pending,created_at').single();
-      if (error || !data) throw new Error(error?.code === '413' ? 'quota_exceeded' : 'metadata_save_failed');
-      metadataSaved = true;
-      clearTusTarget(userId, file);
-      state.uploadedVideos = [data, ...state.uploadedVideos.filter((item) => item.id !== data.id)].slice(0, 100);
-      uploaded += 1;
-      updateVideoUploadProgress(file.name, index + 1, files.length, 100, `${index + 1}/${files.length} · arşive kaydedildi`);
-      renderUploadedVideos();
-    } catch (error) {
-      state.activeTusUpload = null;
-      if (uploadCompleted && !metadataSaved && state.session?.user?.id === userId) {
-        try {
-          const { data: savedRow } = await supabase.from('uploaded_videos')
-            .select('id,user_id,original_filename,storage_path,mime_type,size_bytes,cleanup_pending,created_at')
-            .eq('user_id', userId).eq('storage_path', objectPath).maybeSingle();
-          if (savedRow) {
-            clearTusTarget(userId, file);
-            state.uploadedVideos = [savedRow, ...state.uploadedVideos.filter((item) => item.id !== savedRow.id)].slice(0, 100);
-            uploaded += 1;
-            updateVideoUploadProgress(file.name, index + 1, files.length, 100, `${index + 1}/${files.length} · arşive kaydedildi`);
-            renderUploadedVideos();
-            continue;
-          }
-        } catch { /* A failed lookup falls through to an owner-scoped orphan cleanup attempt. */ }
-      }
+      result = await supabase.rpc('enqueue_video_import', {
+        p_source_url: item.url,
+        p_rights_confirmed: true,
+        p_expected_user_id: userId,
+      });
+    } catch {
       failed += 1;
-      let cleanupFailed = false;
-      if (uploadCompleted && !metadataSaved && uploadAccessToken) {
-        try {
-          await removeUntrackedVideoObject(objectPath, uploadAccessToken);
-          clearTusTarget(userId, file);
-        } catch (cleanupError) {
-          cleanupFailed = true;
-          console.warn('Unregistered private video cleanup failed:', cleanupError?.name || 'cleanup error');
-        }
-      }
-      const reason = error?.message === 'quota_exceeded'
-        ? 'Supabase depolama kotası dolu.'
-        : cleanupFailed
-          ? 'Yükleme kaydı oluşturulamadı; aynı dosyayı yeniden seç. Özel dosya güvenli yeniden denemede üzerine yazılır.'
-          : 'Yükleme tamamlanamadı; aynı dosyayı yeniden seçerek kaldığı yerden sürdürebilirsin.';
-      updateVideoUploadProgress(file.name, index + 1, files.length, 0, `${index + 1}/${files.length} · yükleme başarısız`);
-      toast(`${file.name}: ${reason}`, 'error');
+      continue;
+    }
+    const { data, error } = result || {};
+    if (error) {
+      if (error.code === '23505' || /video_import_duplicate|already archived/i.test(error.message || '')) duplicate += 1;
+      else failed += 1;
+    } else if (data) {
+      added += 1;
+    } else {
+      duplicate += 1;
     }
   }
-  if (button) { button.disabled = false; button.innerHTML = `${icon('plus', 17)} Arşive yükle`; }
-  if (input) input.value = '';
-  if (uploaded) {
-    toast(`${uploaded} video özel arşive kaydedildi.`, 'success');
-    await loadUploadedVideos(true);
+  if (authUserGeneration !== userGeneration || state.session?.user?.id !== userId) return;
+  state.videoImportBusy = false;
+  if (button) { button.disabled = false; button.innerHTML = `${icon('plus', 17)} Buluta kaydet`; }
+  if (failed === 0) {
+    if (input) input.value = '';
+    if (rights) rights.checked = false;
   }
-  if (failed && !uploaded) toast('Video arşive eklenemedi. Dosya boyutunu ve Supabase kotasını kontrol et.', 'error');
-  setTimeout(() => {
-    state.videoUploadProgress = null;
-    renderVideoUploadProgress();
-  }, 1800);
+  await loadUploadedVideos(true);
+  const parts = [];
+  if (added) parts.push(`${added} Reel bulut indirme kuyruğuna eklendi`);
+  if (duplicate) parts.push(`${duplicate} zaten arşivde veya sırada`);
+  if (failed) parts.push(`${failed} bağlantı eklenemedi`);
+  toast(parts.join(' · ') || 'Arşiv kuyruğu değişmedi.', failed ? 'warn' : 'success');
+  if (failed && parsed.invalid[0]?.reason) toast(parsed.invalid[0].reason, 'warn');
+}
+
+async function retryVideoImport(importId) {
+  const button = [...document.querySelectorAll('[data-action="retry-video-import"]')]
+    .find((item) => item.dataset.id === importId);
+  if (button) { button.disabled = true; button.textContent = 'Tekrar sıraya alınıyor…'; }
+  let data = null;
+  let error = null;
+  try {
+    ({ data, error } = await supabase.rpc('retry_video_import', { p_import_id: importId }));
+  } catch {
+    error = new Error('network_error');
+  }
+  if (error) toast('Bulut indirme tekrar başlatılamadı. Bağlantıyı kontrol edip yeniden dene.', 'error');
+  else if (data) toast('Instagram bağlantısı yeniden bulut kuyruğuna alındı.', 'success');
+  else toast('Bu indirme artık tekrar denenemiyor; arşiv durumunu yeniledim.', 'info');
+  await loadUploadedVideos(true);
 }
 
 async function previewUploadedVideo(videoId) {
+  const userId = state.session?.user?.id;
+  const userGeneration = authUserGeneration;
   const video = state.uploadedVideos.find((item) => item.id === videoId && item.storage_path && !item.cleanup_pending);
-  if (!video) {
+  if (!userId || !video) {
     toast('Bu video arşivde bulunamadı; listeyi yenile.', 'warn');
     return;
   }
   const { data, error } = await supabase.storage.from(VIDEO_STORAGE_BUCKET).createSignedUrl(video.storage_path, 3600);
+  if (authUserGeneration !== userGeneration || state.session?.user?.id !== userId
+      || !state.uploadedVideos.some((item) => item.id === videoId && item.storage_path === video.storage_path)) return;
   const signedUrl = data?.signedUrl || data?.signedURL;
   if (error || !signedUrl) {
     toast('Video için güvenli oynatma bağlantısı oluşturulamadı.', 'error');
@@ -1388,6 +1306,10 @@ async function handleClick(event) {
     await loadUploadedVideos();
     return;
   }
+  if (button.dataset.action === 'retry-video-import') {
+    await retryVideoImport(button.dataset.id);
+    return;
+  }
   if (button.id === 'instagram-disconnect-button') {
     await disconnectInstagram();
     return;
@@ -1530,9 +1452,9 @@ async function handleClick(event) {
 
 root.addEventListener('click', handleClick);
 root.addEventListener('submit', async (event) => {
-  if (event.target.id === 'video-upload-form') {
+  if (event.target.id === 'video-import-form') {
     event.preventDefault();
-    await uploadVideoFiles(event.target);
+    await enqueueVideoImports(event.target);
     return;
   }
   if (event.target.id === 'login-form') {
@@ -1663,8 +1585,12 @@ supabase.auth.onAuthStateChange((event, session) => {
   if (session?.user) {
     const sameUser = state.session?.user?.id === session.user.id;
     if (!sameUser) {
+      authUserGeneration += 1;
+      closeVideoPreview();
       state.rows = [];
       state.uploadedVideos = [];
+      state.videoImports = [];
+      state.videoImportBusy = false;
       state.uploadedVideoDrafts = {};
       state.uploadedVideoDraftsUserId = '';
       state.uploadedVideosLoading = false;
@@ -1693,11 +1619,15 @@ supabase.auth.onAuthStateChange((event, session) => {
     loadInstagramAccount();
     loadQueue();
   } else if (!session) {
-    state.activeTusUpload?.abort(false);
-    state.activeTusUpload = null;
+    if (state.session?.user?.id) {
+      authUserGeneration += 1;
+      closeVideoPreview();
+    }
     state.session = null;
     state.rows = [];
     state.uploadedVideos = [];
+    state.videoImports = [];
+    state.videoImportBusy = false;
     state.uploadedVideoDrafts = {};
     state.uploadedVideoDraftsUserId = '';
     state.uploadedVideosLoading = false;
@@ -1753,6 +1683,14 @@ document.addEventListener('visibilitychange', () => {
 });
 setInterval(() => {
   if (!state.session || document.hidden) return;
+  if (state.videoImports.some((job) => ['queued', 'processing'].includes(job.status))) {
+    if (++videoImportRefreshTicks >= 6) {
+      videoImportRefreshTicks = 0;
+      loadUploadedVideos(true);
+    }
+  } else {
+    videoImportRefreshTicks = 0;
+  }
   if (state.rows.some((row) => row.status === 'processing')) {
     idleQueueRefreshTicks = 0;
     loadQueue(true);
