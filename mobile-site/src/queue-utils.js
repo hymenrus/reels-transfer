@@ -8,6 +8,8 @@ function reelShortcodeKey(item) {
   return String(item?.shortcodeKey || item?.shortcode || '').trim().toLowerCase();
 }
 
+export const NO_REEL_COVER_IMAGE = '__no_cover__';
+
 export function setReelAccountTarget(targets = {}, shortcodeKey, accountId) {
   const key = String(shortcodeKey || '').trim().toLowerCase();
   const id = String(accountId || '').trim();
@@ -43,6 +45,31 @@ export function setReelCoverImageSelection(selections = {}, shortcodeKey, coverI
 
 export function pruneReelCoverImageSelections(items = [], selections = {}) {
   return pruneReelValueMap(items, selections);
+}
+
+export function resolveReelCoverAssignments(items = [], selections = {}, coverImages = [], random = Math.random) {
+  const coverIds = [...new Set(coverImages.map((cover) => String(cover?.id || '').trim()).filter(Boolean))];
+  const overrides = selections && typeof selections === 'object' && !Array.isArray(selections) ? selections : {};
+  const explicitlyUsed = new Set(items
+    .map((item) => String(overrides[reelShortcodeKey(item)] || '').trim())
+    .filter((coverId) => coverId && coverId !== NO_REEL_COVER_IMAGE));
+  let randomPool = coverIds.filter((coverId) => !explicitlyUsed.has(coverId));
+  if (!randomPool.length) randomPool = [...coverIds];
+  for (let index = randomPool.length - 1; index > 0; index -= 1) {
+    const choice = Math.min(index, Math.max(0, Math.floor(random() * (index + 1))));
+    [randomPool[index], randomPool[choice]] = [randomPool[choice], randomPool[index]];
+  }
+  let nextRandomIndex = 0;
+  return new Map(items.map((item) => {
+    const key = reelShortcodeKey(item);
+    const selected = String(overrides[key] || '').trim();
+    if (selected === NO_REEL_COVER_IMAGE) return [key, null];
+    if (selected) return [key, selected];
+    if (!randomPool.length) return [key, null];
+    const coverId = randomPool[nextRandomIndex % randomPool.length];
+    nextRandomIndex += 1;
+    return [key, coverId];
+  }));
 }
 
 export function resolveReelTargetAssignments(items = [], targets = {}, defaultAccountId = '') {

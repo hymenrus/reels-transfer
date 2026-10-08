@@ -82,6 +82,8 @@ test('each URL can target a different account and enqueue uses its own selected 
   assert.match(addToQueue, /p_caption: captionByShortcode\.get\(item\.shortcodeKey\)/);
   assert.match(addToQueue, /enqueue_reel_with_cover/);
   assert.match(addToQueue, /p_cover_image_id: coverByShortcode\.get\(item\.shortcodeKey\)/);
+  assert.match(addToQueue, /resolveReelCoverAssignments\(parsed\.items, state\.reelCoverImageSelections, state\.videoCoverImages\)/);
+  assert.match(source, /Otomatik · rastgele kapak/);
   assert.doesNotMatch(addToQueue, /const targetInstagramAccountId/);
   assert.match(source, /reelAccountTargets:\s*\{\s*\.\.\.state\.reelAccountTargets\s*\}/);
   assert.match(source, /reelCaptionTemplateSelections:\s*\{\s*\.\.\.state\.reelCaptionTemplateSelections\s*\}/);

@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, PUBLISHER_SETUP_READY } from './config.js';
-import { estimateQueueEta, pruneReelAccountTargets, pruneReelCaptionTemplateSelections, pruneReelCoverImageSelections, resolveReelTargetAssignments, selectInstagramAccount, setReelAccountTarget, setReelCoverImageSelection } from './queue-utils.js';
+import { estimateQueueEta, NO_REEL_COVER_IMAGE, pruneReelAccountTargets, pruneReelCaptionTemplateSelections, pruneReelCoverImageSelections, resolveReelCoverAssignments, resolveReelTargetAssignments, selectInstagramAccount, setReelAccountTarget, setReelCoverImageSelection } from './queue-utils.js';
 import { captionForAccount, captionForReelUrl, hasReelDraftContent, setCaptionForAccount, setTagsForAccount, tagsForAccount, validateCaptionTemplate } from './caption-utils.js';
 import { parseReelLines } from './url-utils.js';
 import { formatVideoFileSize, mapWithConcurrency, MAX_VIDEO_IMPORTS_PER_BATCH, VIDEO_IMPORT_CONCURRENCY, VIDEO_STORAGE_BUCKET, VIDEO_COVER_BUCKET, MAX_COVER_IMAGES_PER_BATCH, coverImageStoragePath, createCoverImageId, validateCoverImageFile } from './uploaded-video-utils.js';
@@ -355,24 +355,29 @@ function renderReelTargetAssignments() {
       : '';
     const templateOptions = state.captionTemplates.map((template) => `<option value="${escapeHtml(template.id)}"${template.id === templateId ? ' selected' : ''}>${escapeHtml(template.name)}</option>`).join('');
     const templateDisabled = state.captionTemplatesLoading ? ' disabled' : '';
-    const coverId = state.reelCoverImageSelections[item.shortcodeKey] || '';
+    const coverChoice = state.reelCoverImageSelections[item.shortcodeKey] || '';
+    const coverId = coverChoice === NO_REEL_COVER_IMAGE ? '' : coverChoice;
     const selectedCover = state.videoCoverImages.find((cover) => cover.id === coverId);
     const staleCoverOption = coverId && !selectedCover
       ? `<option value="${escapeHtml(coverId)}" selected disabled>Seçili kapak yüklenemedi</option>` : '';
     const coverOptions = state.videoCoverImages.map((cover) => `<option value="${escapeHtml(cover.id)}"${cover.id === coverId ? ' selected' : ''}>${escapeHtml(cover.original_filename)}</option>`).join('');
     const coverPreview = selectedCover?.signedUrl
       ? `<span class="reel-cover-preview"><img src="${escapeHtml(selectedCover.signedUrl)}" alt="${escapeHtml(selectedCover.original_filename)}" loading="lazy" /><small>${escapeHtml(selectedCover.original_filename)}</small></span>`
-      : selectedCover ? '<small class="reel-cover-note">Önizleme yenilenince açılır; seçilen kapak yayın sırasında kullanılır.</small>' : '';
+      : selectedCover ? '<small class="reel-cover-note">Önizleme yenilenince açılır; seçilen kapak yayın sırasında kullanılır.</small>'
+        : coverChoice === NO_REEL_COVER_IMAGE ? '<small class="reel-cover-note">Bu URL’de videonun kendi karesi kullanılacak.</small>'
+          : state.videoCoverImages.length ? '<small class="reel-cover-note">Seçmezsen arşivindeki kapaklardan rastgele atanır.</small>'
+            : '<small class="reel-cover-note">Kütüphanede kapak yok; videonun karesi kullanılacak.</small>';
     const coverDisabled = state.uploadedVideosLoading ? ' disabled' : '';
+    const automaticCoverLabel = state.videoCoverImages.length ? 'Otomatik · rastgele kapak' : 'Kapak yok · videodan kare';
     const status = targetAvailable
       ? `Hedef hesap: @${escapeHtml(targetAccount?.username || '')}`
       : 'Bu hesap bağlantısı kesilmiş; yeniden bağla veya başka hedef seç.';
-    return `<div class="reel-target-row"><div class="reel-target-info"><strong>/${escapeHtml(item.shortcode)}</strong><small class="${targetAvailable ? '' : 'is-unavailable'}">${status}</small></div><label class="reel-target-field"><span>Yayın hesabı</span><select data-reel-target-select data-shortcode-key="${escapeHtml(item.shortcodeKey)}" aria-label="/${escapeHtml(item.shortcode)} yayın hesabı">${staleOption}${options}</select></label><label class="reel-target-field"><span>Açıklama taslağı</span><select data-reel-caption-template data-shortcode-key="${escapeHtml(item.shortcodeKey)}" aria-label="/${escapeHtml(item.shortcode)} açıklama taslağı"${templateDisabled}>${staleTemplateOption}<option value=""${templateId ? '' : ' selected'}>Genel açıklama</option>${templateOptions}</select></label><label class="reel-target-field reel-cover-field"><span>Reels kapağı</span><select data-reel-cover-select data-shortcode-key="${escapeHtml(item.shortcodeKey)}" aria-label="/${escapeHtml(item.shortcode)} Reels kapağı"${coverDisabled}>${staleCoverOption}<option value=""${coverId ? '' : ' selected'}>Kapak seçme · videodan kare</option>${coverOptions}${state.videoCoverImages.length ? '' : '<option value="" disabled>Önce arşive JPEG kapak yükle</option>'}</select>${coverPreview}</label></div>`;
+    return `<div class="reel-target-row"><div class="reel-target-info"><strong>/${escapeHtml(item.shortcode)}</strong><small class="${targetAvailable ? '' : 'is-unavailable'}">${status}</small></div><label class="reel-target-field"><span>Yayın hesabı</span><select data-reel-target-select data-shortcode-key="${escapeHtml(item.shortcodeKey)}" aria-label="/${escapeHtml(item.shortcode)} yayın hesabı">${staleOption}${options}</select></label><label class="reel-target-field"><span>Açıklama taslağı</span><select data-reel-caption-template data-shortcode-key="${escapeHtml(item.shortcodeKey)}" aria-label="/${escapeHtml(item.shortcode)} açıklama taslağı"${templateDisabled}>${staleTemplateOption}<option value=""${templateId ? '' : ' selected'}>Genel açıklama</option>${templateOptions}</select></label><label class="reel-target-field reel-cover-field"><span>Reels kapağı</span><select data-reel-cover-select data-shortcode-key="${escapeHtml(item.shortcodeKey)}" aria-label="/${escapeHtml(item.shortcode)} Reels kapağı"${coverDisabled}>${staleCoverOption}<option value=""${!coverChoice ? ' selected' : ''}>${automaticCoverLabel}</option><option value="${NO_REEL_COVER_IMAGE}"${coverChoice === NO_REEL_COVER_IMAGE ? ' selected' : ''}>Videonun karesini kullan</option>${coverOptions}</select>${coverPreview}</label></div>`;
   }).join('');
   const coverAction = state.videoCoverImages.length
     ? `${state.videoCoverImages.length} kayıtlı kapak`
     : '<a href="#video-library-section">Arşive kapak yükle →</a>';
-  panel.innerHTML = `<div class="reel-target-heading"><strong>Her Reel için hesap, açıklama ve kapak</strong><small>Her URL’ye ayrı hesap, kayıtlı açıklama ve arşivindeki kapak atanır. Kapak görselleri kütüphanede saklanır; ${coverAction}. “Genel açıklama” seçiliyse üstteki ortak açıklama uygulanır.</small></div><div class="reel-target-list">${rows}</div>`;
+  panel.innerHTML = `<div class="reel-target-heading"><strong>Her Reel için hesap, açıklama ve kapak</strong><small>Her URL’ye ayrı hesap ve açıklama seçebilirsin. Kapak seçmezsen arşivindeki JPEG kapaklardan rastgele atanır; istersen URL’ye özel kapak seç veya videonun karesini kullan. Kapak görselleri kütüphanede saklanır; ${coverAction}. “Genel açıklama” seçiliyse üstteki ortak açıklama uygulanır.</small></div><div class="reel-target-list">${rows}</div>`;
 }
 function updateStats() {
   const counts = { total: state.rows.length, queued: 0, published: 0, failed: 0 };
@@ -1587,22 +1592,42 @@ async function addToQueue(form) {
     return;
   }
   const selectedCoverEntries = parsed.items.map((item) => [item, state.reelCoverImageSelections[item.shortcodeKey] || '']);
-  if (state.uploadedVideosLoading && selectedCoverEntries.some(([, coverId]) => coverId)) {
+  if (state.uploadedVideosLoading && selectedCoverEntries.some(([, coverChoice]) => coverChoice !== NO_REEL_COVER_IMAGE)) {
     toast('Kapak kütüphanesi yükleniyor; birkaç saniye sonra tekrar dene.', 'warn');
     return;
   }
+  const needsAutomaticCover = selectedCoverEntries.some(([, coverId]) => !coverId);
+  if (state.videoCoverImagesError && needsAutomaticCover) {
+    toast('Kapak kütüphanesi okunamadı. Yenileyip tekrar dene; seçim yapılmadan paylaşım rastgele kapaksız gönderilmesin.', 'error');
+    return;
+  }
   const coverIds = new Set(state.videoCoverImages.map((cover) => cover.id));
-  const missingCoverEntry = selectedCoverEntries.find(([, coverId]) => coverId && !coverIds.has(coverId));
+  const missingCoverEntry = selectedCoverEntries.find(([, coverId]) => coverId && coverId !== NO_REEL_COVER_IMAGE && !coverIds.has(coverId));
   if (missingCoverEntry) {
     toast(`/${missingCoverEntry[0].shortcodeKey} için seçilen kapak artık kütüphanede yok. Başka kapak seç veya seçimi kaldır.`, 'error');
     renderReelTargetAssignments();
     return;
   }
-  const coverByShortcode = new Map(selectedCoverEntries.map(([item, coverId]) => [item.shortcodeKey, coverId || null]));
+  const coverByShortcode = resolveReelCoverAssignments(parsed.items, state.reelCoverImageSelections, state.videoCoverImages);
   if (!rights.checked) {
     toast('Devam etmek için içerik paylaşma hakkını onayla.', 'error');
     rights.focus();
     return;
+  }
+  let hasAutomaticCover = false;
+  for (const item of parsed.items) {
+    if (state.reelCoverImageSelections[item.shortcodeKey]) continue;
+    const coverId = coverByShortcode.get(item.shortcodeKey);
+    if (coverId) {
+      state.reelCoverImageSelections = setReelCoverImageSelection(state.reelCoverImageSelections, item.shortcodeKey, coverId);
+      hasAutomaticCover = true;
+    }
+  }
+  if (hasAutomaticCover) {
+    saveReelDraft();
+    renderReelTargetAssignments();
+  } else if (needsAutomaticCover && !state.videoCoverImages.length) {
+    toast('Arşivde kayıtlı kapak bulunamadı; bu Reels videonun kendi karesiyle gönderilecek.', 'warn');
   }
   const button = form.querySelector('#add-submit');
   state.busy = true;
@@ -1968,7 +1993,7 @@ root.addEventListener('change', async (event) => {
   if (event.target.matches('[data-reel-cover-select]')) {
     const key = event.target.dataset.shortcodeKey;
     const coverId = event.target.value;
-    if (coverId && !state.videoCoverImages.some((cover) => cover.id === coverId)) {
+    if (coverId && coverId !== NO_REEL_COVER_IMAGE && !state.videoCoverImages.some((cover) => cover.id === coverId)) {
       renderReelTargetAssignments();
       toast('Bu kapak arşivde bulunamadı. Listeyi yenileyip tekrar seç.', 'warn');
       return;

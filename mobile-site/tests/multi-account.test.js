@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { estimateQueueEta, pruneReelAccountTargets, pruneReelCaptionTemplateSelections, pruneReelCoverImageSelections, resolveReelTargetAssignments, selectInstagramAccount, setReelAccountTarget, setReelCoverImageSelection } from '../src/queue-utils.js';
+import { estimateQueueEta, NO_REEL_COVER_IMAGE, pruneReelAccountTargets, pruneReelCaptionTemplateSelections, pruneReelCoverImageSelections, resolveReelCoverAssignments, resolveReelTargetAssignments, selectInstagramAccount, setReelAccountTarget, setReelCoverImageSelection } from '../src/queue-utils.js';
 
 const now = Date.parse('2026-10-08T12:00:00Z');
 const accounts = [
@@ -52,6 +52,28 @@ test('preserves a saved cover per URL and prunes only covers for removed URLs', 
   assert.deepEqual(pruneReelCoverImageSelections(items, withSecond), { abc123: 'cover-a', xyz456: 'cover-b' });
   assert.deepEqual(pruneReelCoverImageSelections([items[0]], withSecond), { abc123: 'cover-a' });
   assert.deepEqual(setReelCoverImageSelection(withSecond, 'ABC123', ''), { xyz456: 'cover-b' });
+});
+
+test('randomly assigns stored covers by default, preserves explicit choices, and supports the video-frame override', () => {
+  const items = [
+    { shortcode: 'AbC123', shortcodeKey: 'abc123' },
+    { shortcode: 'XyZ456', shortcodeKey: 'xyz456' },
+    { shortcode: 'DeF789', shortcodeKey: 'def789' },
+  ];
+  const assignments = resolveReelCoverAssignments(items, { abc123: 'cover-a', xyz456: NO_REEL_COVER_IMAGE }, [
+    { id: 'cover-a' }, { id: 'cover-b' }, { id: 'cover-c' },
+  ], () => 0);
+
+  assert.equal(assignments.get('abc123'), 'cover-a');
+  assert.equal(assignments.get('xyz456'), null);
+  assert.equal(assignments.get('def789'), 'cover-c');
+  assert.equal(resolveReelCoverAssignments(items, {}, [], () => 0).get('abc123'), null);
+});
+
+test('random cover distribution avoids repeats until available covers have been used', () => {
+  const items = [{ shortcodeKey: 'one' }, { shortcodeKey: 'two' }];
+  const assignments = resolveReelCoverAssignments(items, {}, [{ id: 'a' }, { id: 'b' }], () => 0);
+  assert.notEqual(assignments.get('one'), assignments.get('two'));
 });
 
 test('calculates normal queue ETAs independently for each Instagram account', () => {
