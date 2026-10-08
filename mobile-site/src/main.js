@@ -229,7 +229,7 @@ function renderShell() {
           <section class="content-grid">
             <article class="panel add-panel" id="add-section">
               <div class="panel-heading"><div><span class="eyebrow">YENİ İÇERİK</span><h2>Kuyruğa Reel ekle</h2></div><span class="heading-icon">${icon('plus', 20)}</span></div>
-              <p class="panel-copy">Her satıra bir Instagram Reel bağlantısı yaz. Ayrı açıklama alanı, bu sefer eklediğin tüm Reels'lere uygulanır.</p>
+              <p class="panel-copy">Her satıra bir Instagram Reel bağlantısı yaz. URL’leri ekleyince her bağlantı için hesap, açıklama ve kapak seçimi görünür. Ayrı açıklama alanı, bu sefer eklediğin tüm Reels'lere uygulanır.</p>
               <form id="add-form">
                 <label class="sr-only" for="reel-input">Reel bağlantıları</label>
                 <textarea id="reel-input" rows="5" placeholder="https://www.instagram.com/reel/ABC123/&#10;https://www.instagram.com/reel/XYZ456/"></textarea>
@@ -334,20 +334,17 @@ function renderReelTargetAssignments() {
 
   panel.hidden = false;
   const connectedAccounts = state.instagramAccounts.filter((account) => account && !account.disconnected_at);
-  if (!connectedAccounts.length) {
-    panel.innerHTML = '<div class="reel-target-heading"><strong>Reel başına yayın hesabı</strong><small>Hedef seçmek için önce bir Instagram hesabı bağla.</small></div>';
-    return;
-  }
-
   const defaultAccountId = connectedAccounts.some((account) => account.id === state.instagram?.id)
     ? state.instagram.id
-    : connectedAccounts[0].id;
+    : connectedAccounts[0]?.id || '';
   const rows = items.map((item) => {
     const targetId = state.reelAccountTargets[item.shortcodeKey] || defaultAccountId;
     const targetAccount = state.instagramAccounts.find((account) => account.id === targetId);
     const targetAvailable = connectedAccounts.some((account) => account.id === targetId);
-    const staleOption = targetAvailable ? '' : `<option value="${escapeHtml(targetId)}" selected disabled>@${escapeHtml(targetAccount?.username || 'hesap')} · bağlantı kesildi</option>`;
+    const staleOption = targetId && !targetAvailable ? `<option value="${escapeHtml(targetId)}" selected disabled>@${escapeHtml(targetAccount?.username || 'hesap')} · bağlantı kesildi</option>` : '';
     const options = connectedAccounts.map((account) => `<option value="${escapeHtml(account.id)}"${account.id === targetId ? ' selected' : ''}>@${escapeHtml(account.username)}</option>`).join('');
+    const noAccountOption = connectedAccounts.length ? '' : `<option value=""${targetId ? '' : ' selected'} disabled>Önce Instagram hesabı bağla</option>`;
+    const accountDisabled = connectedAccounts.length ? '' : ' disabled';
     const templateId = state.reelCaptionTemplateSelections[item.shortcodeKey] || '';
     const selectedTemplate = state.captionTemplates.find((template) => template.id === templateId);
     const staleTemplateOption = templateId && !selectedTemplate
@@ -369,10 +366,12 @@ function renderReelTargetAssignments() {
             : '<small class="reel-cover-note">Kütüphanede kapak yok; videonun karesi kullanılacak.</small>';
     const coverDisabled = state.uploadedVideosLoading ? ' disabled' : '';
     const automaticCoverLabel = state.videoCoverImages.length ? 'Rastgele · yüklenmiş kapaklardan' : 'Kapak yok · videodan kare';
-    const status = targetAvailable
+    const status = !connectedAccounts.length
+      ? 'Önce Instagram hesabı bağla; kapak ve açıklama seçimini şimdi yapabilirsin.'
+      : targetAvailable
       ? `Hedef hesap: @${escapeHtml(targetAccount?.username || '')}`
       : 'Bu hesap bağlantısı kesilmiş; yeniden bağla veya başka hedef seç.';
-    return `<div class="reel-target-row"><div class="reel-target-info"><strong>/${escapeHtml(item.shortcode)}</strong><small class="${targetAvailable ? '' : 'is-unavailable'}">${status}</small></div><label class="reel-target-field"><span>Yayın hesabı</span><select data-reel-target-select data-shortcode-key="${escapeHtml(item.shortcodeKey)}" aria-label="/${escapeHtml(item.shortcode)} yayın hesabı">${staleOption}${options}</select></label><label class="reel-target-field"><span>Açıklama taslağı</span><select data-reel-caption-template data-shortcode-key="${escapeHtml(item.shortcodeKey)}" aria-label="/${escapeHtml(item.shortcode)} açıklama taslağı"${templateDisabled}>${staleTemplateOption}<option value=""${templateId ? '' : ' selected'}>Genel açıklama</option>${templateOptions}</select></label><label class="reel-target-field reel-cover-field"><span>Reels kapağı</span><select data-reel-cover-select data-shortcode-key="${escapeHtml(item.shortcodeKey)}" aria-label="/${escapeHtml(item.shortcode)} Reels kapağı"${coverDisabled}>${staleCoverOption}<option value=""${!coverChoice ? ' selected' : ''}>${automaticCoverLabel}</option><option value="${NO_REEL_COVER_IMAGE}"${coverChoice === NO_REEL_COVER_IMAGE ? ' selected' : ''}>Videonun karesini kullan</option>${coverOptions}</select>${coverPreview}</label></div>`;
+    return `<div class="reel-target-row"><div class="reel-target-info"><strong>/${escapeHtml(item.shortcode)}</strong><small class="${targetAvailable || !connectedAccounts.length ? '' : 'is-unavailable'}">${status}</small></div><label class="reel-target-field"><span>Yayın hesabı</span><select data-reel-target-select data-shortcode-key="${escapeHtml(item.shortcodeKey)}" aria-label="/${escapeHtml(item.shortcode)} yayın hesabı"${accountDisabled}>${staleOption}${noAccountOption}${options}</select></label><label class="reel-target-field"><span>Açıklama taslağı</span><select data-reel-caption-template data-shortcode-key="${escapeHtml(item.shortcodeKey)}" aria-label="/${escapeHtml(item.shortcode)} açıklama taslağı"${templateDisabled}>${staleTemplateOption}<option value=""${templateId ? '' : ' selected'}>Genel açıklama</option>${templateOptions}</select></label><label class="reel-target-field reel-cover-field"><span>Reels kapağı</span><select data-reel-cover-select data-shortcode-key="${escapeHtml(item.shortcodeKey)}" aria-label="/${escapeHtml(item.shortcode)} Reels kapağı"${coverDisabled}>${staleCoverOption}<option value=""${!coverChoice ? ' selected' : ''}>${automaticCoverLabel}</option><option value="${NO_REEL_COVER_IMAGE}"${coverChoice === NO_REEL_COVER_IMAGE ? ' selected' : ''}>Videonun karesini kullan</option>${coverOptions}</select>${coverPreview}</label></div>`;
   }).join('');
   const coverAction = state.videoCoverImages.length
     ? `${state.videoCoverImages.length} kayıtlı kapak`

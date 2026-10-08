@@ -89,3 +89,16 @@ test('each URL can target a different account and enqueue uses its own selected 
   assert.match(source, /reelCaptionTemplateSelections:\s*\{\s*\.\.\.state\.reelCaptionTemplateSelections\s*\}/);
   assert.match(source, /reelCoverImageSelections:\s*\{\s*\.\.\.state\.reelCoverImageSelections\s*\}/);
 });
+
+test('per-URL cover selector stays visible on mobile before an Instagram account is connected', () => {
+  const start = source.indexOf('function renderReelTargetAssignments()');
+  const end = source.indexOf('\nfunction updateStats()', start);
+  const renderer = source.slice(start, end);
+
+  assert.ok(start >= 0 && end > start);
+  assert.match(renderer, /const noAccountOption = connectedAccounts\.length \? ''/);
+  assert.match(renderer, /data-reel-cover-select data-shortcode-key=/);
+  assert.match(renderer, /kapak ve açıklama seçimini şimdi yapabilirsin/);
+  assert.doesNotMatch(renderer, /if \(!connectedAccounts\.length\)[\s\S]*?return;/);
+  assert.match(source, /URL’leri ekleyince her bağlantı için hesap, açıklama ve kapak seçimi görünür/);
+});
