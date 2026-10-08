@@ -94,9 +94,13 @@ Deno.serve(async (req: Request) => {
       p_granted_scopes: permissions,
     });
     if (saveError) {
-      // Do not log API responses or OAuth tokens; unique-account conflicts are handled as a safe generic error.
-      console.error("Instagram connection could not be saved.");
-      return appRedirect("account_already_linked");
+      // Never log OAuth tokens, Instagram IDs, usernames, or raw database error text.
+      const safeCode = /^[A-Z0-9]{5}$/.test(String(saveError.code || "")) ? saveError.code : "unknown";
+      console.error("Instagram connection save failed; database code:", safeCode);
+      const safeMessage = String(saveError.message || "");
+      if (safeMessage.includes("Instagram account already linked")) return appRedirect("account_already_linked");
+      if (safeMessage.includes("required Instagram publishing permissions")) return appRedirect("permissions_missing");
+      return appRedirect("connection_save_failed");
     }
     return appRedirect("connected");
   } catch (error) {

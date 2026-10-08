@@ -9,6 +9,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
 });
 const state = { session: null, rows: [], instagram: null, instagramAccounts: [], preferNewestInstagramAccount: false, filter: 'all', theme: localStorage.getItem('reelflow-theme') || 'dark', installPrompt: null, busy: false };
+let instagramAccountLoadGeneration = 0;
 let idleQueueRefreshTicks = 0;
 document.documentElement.dataset.theme = state.theme;
 
@@ -341,9 +342,12 @@ async function loadQueue(silent = false) {
 
 async function loadInstagramAccount() {
   if (!state.session) return;
+  const userId = state.session.user.id;
+  const generation = ++instagramAccountLoadGeneration;
   const { data, error } = await supabase.from('instagram_accounts')
     .select('id,instagram_user_id,username,token_expires_at,connected_at,publish_interval_minutes,last_published_at,last_processed_at,last_media_sync_at,disconnected_at')
-    .eq('user_id', state.session.user.id).order('connected_at', { ascending: false }).limit(50);
+    .eq('user_id', userId).order('connected_at', { ascending: false }).limit(50);
+  if (generation !== instagramAccountLoadGeneration || state.session?.user?.id !== userId) return;
   if (error) {
     state.instagram = null;
     state.instagramAccounts = [];
@@ -371,16 +375,22 @@ function renderInstagramAccount() {
     const intervals = [[60, '1 saat'], [180, '3 saat'], [360, '6 saat'], [720, '12 saat'], [1440, '1 gün'], [2880, '2 gün']];
     const selectedInterval = Number(state.instagram.publish_interval_minutes || 360);
     const options = intervals.map(([minutes, label]) => `<option value="${minutes}" ${selectedInterval === minutes ? 'selected' : ''}>${label}</option>`).join('');
-    const accountOptions = connected.map((account) => `<option value="${escapeHtml(account.id)}" ${account.id === state.instagram.id ? 'selected' : ''}>@${escapeHtml(account.username)}</option>`).join('');
-    card.innerHTML = `<div class="instagram-account-top"><div class="instagram-account-copy"><span class="ig-connected-mark">✓</span><div><strong>@${escapeHtml(state.instagram.username)}</strong><small>Instagram profesyonel hesabı bağlı · token bitişi ${fmtDate(state.instagram.token_expires_at)}</small></div></div><button id="instagram-disconnect-button" class="mini-button mini-danger">Bağlantıyı kes</button></div><label class="ig-account-select-row" for="instagram-account-select"><span><strong>Yayın hesabı</strong><small>Yeni Reels bu hesaba gider; kuyruktaki mevcut Reels’in hedefi değişmez.</small></span><select id="instagram-account-select" class="ig-account-select" aria-label="Yeni Reels için yayın hesabı" ${connected.length < 2 ? 'disabled' : ''}>${accountOptions}</select></label><div class="ig-account-actions"><button id="instagram-connect-button" class="mini-button ig-add-account">${icon('plus', 13)} Hesap ekle</button></div><label class="ig-interval-row" for="publish-interval-select"><span><strong>@${escapeHtml(state.instagram.username)} · Reels aralığı</strong><small>Yalnızca seçili hesabın normal aralığıdır; “Hemen paylaş” tek Reel’in beklemesini atlar.</small></span><select id="publish-interval-select" class="ig-interval-select" aria-label="Seçili hesabın Reels aralığı">${options}</select></label><p id="instagram-connect-status" class="oauth-status" role="status" aria-live="polite"></p>`;
+    const accountChoices = connected.map((account) => `<button type="button" class="ig-account-choice ${account.id === state.instagram.id ? 'is-active' : ''}" data-action="switch-account" data-account-id="${escapeHtml(account.id)}" aria-pressed="${account.id === state.instagram.id}">@${escapeHtml(account.username)}</button>`).join('');
+    card.innerHTML = `<div class="instagram-account-top"><div class="instagram-account-copy"><span class="ig-connected-mark">✓</span><div><strong>@${escapeHtml(state.instagram.username)}</strong><small>Instagram profesyonel hesabı bağlı · token bitişi ${fmtDate(state.instagram.token_expires_at)}</small></div></div><button type="button" id="instagram-disconnect-button" class="mini-button mini-danger">Seçili hesabı kes</button></div><div class="ig-account-select-row"><div><strong>Yayın hesabı</strong><small>Bir hesaba dokun; yeni Reels o hesaba gider. Kuyruktaki mevcut Reels değişmez.</small></div><div class="ig-account-choices" role="group" aria-label="Yeni Reels için yayın hesabı">${accountChoices}</div></div><div class="ig-account-actions"><button type="button" id="instagram-connect-button" class="mini-button ig-add-account">${icon('plus', 13)} Hesap ekle</button></div><label class="ig-interval-row" for="publish-interval-select"><span><strong>@${escapeHtml(state.instagram.username)} · Reels aralığı</strong><small>Yalnızca seçili hesabın normal aralığıdır; “Hemen paylaş” tek Reel’in beklemesini atlar.</small></span><select id="publish-interval-select" class="ig-interval-select" aria-label="Seçili hesabın Reels aralığı">${options}</select></label><p id="instagram-connect-status" class="oauth-status" role="status" aria-live="polite"></p>`;
   } else {
     const disconnected = state.instagramAccounts[0];
     const title = disconnected ? `@${escapeHtml(disconnected.username)} hesabının bağlantısı kesilmiş` : 'Instagram hesabını bağla';
     const detail = disconnected
       ? 'Kuyruk geçmişi korunuyor. Hesabı yeniden bağlayabilir veya başka bir Instagram hesabı ekleyebilirsin.'
       : 'Business veya Creator hesabı gerekir. Meta uygulaması test modunda olduğundan Instagram Tester davetini kabul etmiş hesaplar bağlanabilir.';
-    card.innerHTML = `<div class="instagram-account-copy"><span class="ig-pending-mark">IG</span><div><strong>${title}</strong><small>${detail}</small></div></div><button id="instagram-connect-button" class="button button-primary ig-connect-button">${icon('reel', 16)} ${disconnected ? 'Instagram hesabı bağla' : 'Hesabımı bağla'}</button><p id="instagram-connect-status" class="oauth-status" role="status" aria-live="polite"></p>`;
+    card.innerHTML = `<div class="instagram-account-copy"><span class="ig-pending-mark">IG</span><div><strong>${title}</strong><small>${detail}</small></div></div><button type="button" id="instagram-connect-button" class="button button-primary ig-connect-button">${icon('reel', 16)} ${disconnected ? 'Instagram hesabı bağla' : 'Hesabımı bağla'}</button><p id="instagram-connect-status" class="oauth-status" role="status" aria-live="polite"></p>`;
   }
+  const connectButton = card.querySelector('#instagram-connect-button');
+  connectButton?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!connectButton.disabled) void connectInstagram();
+  });
   const addButton = document.querySelector('#add-submit');
   if (addButton) addButton.disabled = !state.instagram;
 }
@@ -516,7 +526,8 @@ function consumeInstagramCallback() {
     cancelled: ['Instagram izin ekranı tamamlanmadı. Test modunda hesabın Instagram Testers listesinde ve daveti kabul edilmiş olmalı; Business/Creator hesabı kullan.', 'warn'],
     setup_required: ['Instagram bağlantısı henüz hazır değil; site yöneticisinin Meta App ayarlarını tamamlaması gerekiyor.', 'warn'],
     permissions_missing: ['Yayın için gerekli Instagram izinleri verilmedi.', 'warn'],
-    account_already_linked: ['Bu Instagram hesabı başka bir ReelFlow hesabına bağlı veya bağlantı kaydedilemedi.', 'error'],
+    account_already_linked: ['Bu Instagram hesabı başka bir ReelFlow hesabına bağlı. Doğru ReelFlow oturumuyla giriş yapıp yeniden dene.', 'error'],
+    connection_save_failed: ['Instagram doğrulandı ama hesap ReelFlow’a kaydedilemedi. Tekrar dene; sürerse yalnızca bu ekrandaki hata mesajını paylaş.', 'error'],
     state_invalid: ['Güvenli bağlantı süresi doldu. Yeniden bağlanmayı dene.', 'error'],
     token_exchange_failed: ['Meta giriş kodu doğrulanamadı. Yeniden bağlanmayı dene.', 'error'],
     long_token_failed: ['Instagram erişimi güvenli şekilde uzatılamadı.', 'error'],
@@ -605,11 +616,6 @@ async function handleClick(event) {
     await supabase.auth.signOut();
     return;
   }
-  if (button.id === 'instagram-connect-button') {
-    event.preventDefault();
-    await connectInstagram();
-    return;
-  }
   if (button.id === 'instagram-disconnect-button') {
     await disconnectInstagram();
     return;
@@ -660,6 +666,16 @@ async function handleClick(event) {
     state.filter = button.dataset.filter;
     document.querySelectorAll('.filter-chip').forEach((node) => node.classList.toggle('active', node === button));
     renderQueue();
+    return;
+  }
+  if (button.dataset.action === 'switch-account') {
+    const selected = state.instagramAccounts.find((account) => account.id === button.dataset.accountId && !account.disconnected_at);
+    if (!selected || selected.id === state.instagram?.id) return;
+    state.instagram = selected;
+    saveActiveInstagramSelection(selected.id);
+    renderInstagramAccount();
+    renderQueue();
+    toast(`Yayın hesabı @${selected.username} olarak değiştirildi.`, 'success');
     return;
   }
   if (button.dataset.action === 'assign-account') {
