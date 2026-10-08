@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { estimateQueueEta, pruneReelAccountTargets, pruneReelCaptionTemplateSelections, resolveReelTargetAssignments, selectInstagramAccount, setReelAccountTarget } from '../src/queue-utils.js';
+import { estimateQueueEta, pruneReelAccountTargets, pruneReelCaptionTemplateSelections, pruneReelCoverImageSelections, resolveReelTargetAssignments, selectInstagramAccount, setReelAccountTarget, setReelCoverImageSelection } from '../src/queue-utils.js';
 
 const now = Date.parse('2026-10-08T12:00:00Z');
 const accounts = [
@@ -42,6 +42,16 @@ test('preserves a saved template selection per URL and prunes selections when th
   const stored = { ABC123: 'template-1', gone123: 'template-2' };
 
   assert.deepEqual(pruneReelCaptionTemplateSelections(items, stored), { abc123: 'template-1' });
+});
+
+test('preserves a saved cover per URL and prunes only covers for removed URLs', () => {
+  const items = [{ shortcode: 'AbC123', shortcodeKey: 'abc123' }, { shortcode: 'XyZ456', shortcodeKey: 'xyz456' }];
+  const selections = setReelCoverImageSelection({}, 'ABC123', 'cover-a');
+  const withSecond = setReelCoverImageSelection(selections, 'xyz456', 'cover-b');
+
+  assert.deepEqual(pruneReelCoverImageSelections(items, withSecond), { abc123: 'cover-a', xyz456: 'cover-b' });
+  assert.deepEqual(pruneReelCoverImageSelections([items[0]], withSecond), { abc123: 'cover-a' });
+  assert.deepEqual(setReelCoverImageSelection(withSecond, 'ABC123', ''), { xyz456: 'cover-b' });
 });
 
 test('calculates normal queue ETAs independently for each Instagram account', () => {

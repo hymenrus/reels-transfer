@@ -31,6 +31,20 @@ export function pruneReelCaptionTemplateSelections(items = [], selections = {}) 
   return pruneReelValueMap(items, selections);
 }
 
+export function setReelCoverImageSelection(selections = {}, shortcodeKey, coverImageId) {
+  const key = String(shortcodeKey || '').trim().toLowerCase();
+  const id = String(coverImageId || '').trim();
+  const next = { ...(selections && typeof selections === 'object' && !Array.isArray(selections) ? selections : {}) };
+  if (!key) return next;
+  if (id) next[key] = id;
+  else delete next[key];
+  return next;
+}
+
+export function pruneReelCoverImageSelections(items = [], selections = {}) {
+  return pruneReelValueMap(items, selections);
+}
+
 export function resolveReelTargetAssignments(items = [], targets = {}, defaultAccountId = '') {
   const overrides = targets && typeof targets === 'object' && !Array.isArray(targets) ? targets : {};
   const fallback = String(defaultAccountId || '').trim();

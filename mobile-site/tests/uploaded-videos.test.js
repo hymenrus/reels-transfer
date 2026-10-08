@@ -11,6 +11,7 @@ const recoveryMigration = await readFile(new URL('../supabase/migrations/2026100
 const hardeningMigration = await readFile(new URL('../supabase/migrations/202610080009_private_url_import_hardening.sql', import.meta.url), 'utf8');
 const coverQuotaMigration = await readFile(new URL('../supabase/migrations/202610080010_storage_quota_and_reel_covers.sql', import.meta.url), 'utf8');
 const coverPolicyFixMigration = await readFile(new URL('../supabase/migrations/202610080011_fix_cover_storage_path_policy.sql', import.meta.url), 'utf8');
+const perReelCoverMigration = await readFile(new URL('../supabase/migrations/202610080012_per_reel_cover_assignments.sql', import.meta.url), 'utf8');
 const schema = await readFile(new URL('../supabase/schema.sql', import.meta.url), 'utf8');
 const app = await readFile(new URL('../src/main.js', import.meta.url), 'utf8');
 const worker = await readFile(new URL('../../reels_transfer/github_worker.py', import.meta.url), 'utf8');
@@ -92,6 +93,9 @@ test('migrations keep originals private and add owner-isolated, retryable URL im
   assert.match(coverQuotaMigration, /cleanup_pending/);
   assert.match(coverQuotaMigration, /cover_image_id/);
   assert.match(coverPolicyFixMigration, /\[0-9a-f\]\{32\}\[\.\]jpg\$/);
+  assert.match(perReelCoverMigration, /CREATE OR REPLACE FUNCTION public\.enqueue_reel_with_cover/);
+  assert.match(perReelCoverMigration, /c\.user_id = v_user_id[\s\S]*FOR UPDATE/);
+  assert.match(perReelCoverMigration, /GRANT EXECUTE ON FUNCTION public\.enqueue_reel_with_cover/);
   assert.match(schema, /CREATE TABLE IF NOT EXISTS public\.video_import_jobs/);
   assert.match(schema, /45 minutes/);
 });
@@ -131,6 +135,9 @@ test('PWA queues URL-only archive imports and supports local bulk TXT lists', ()
   assert.match(app, /Kalan \$\{formatStorageGigabytes\(left\)\} GB/);
   assert.match(app, /id="video-cover-files"[^>]*multiple/);
   assert.match(app, /data-video-cover-select/);
+  assert.match(app, /Her Reel için hesap, açıklama ve kapak/);
+  assert.match(app, /data-reel-cover-select data-shortcode-key=/);
+  assert.match(app, /reelCoverImageSelections/);
   assert.match(app, /enqueue_uploaded_video_with_cover/);
   assert.match(app, /p_cover_image_id:/);
   assert.match(app, /refresh-storage-usage/);
