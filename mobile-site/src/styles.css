@@ -114,3 +114,9 @@
 
 /* Mobile quick-nav touch and scroll polish */
 @media(max-width:820px){html{scroll-padding-top:calc(74px + env(safe-area-inset-top))}.mobile-nav-item{min-height:44px;touch-action:manipulation;-webkit-tap-highlight-color:transparent;transition:background .14s,color .14s,transform .14s}.mobile-nav-item:active{transform:scale(.96);background:var(--surface-2)}.mobile-nav-item:focus-visible{outline:2px solid var(--teal);outline-offset:-2px}}
+
+
+/* Independent section collapse controls; preserve the existing page order/layout. */
+.overview-section-heading{display:flex;align-items:center;justify-content:space-between;margin:0 1px 8px}.overview-section-heading .eyebrow{margin:0}.panel-heading-actions{display:flex;align-items:center;gap:8px;flex:none}.section-collapse-content[hidden]{display:none!important}.section-toggle-button{display:grid;place-items:center;flex:none;width:38px;height:38px;min-width:38px;padding:0;border:1px solid var(--line);border-radius:11px;background:var(--surface-2);color:var(--muted);cursor:pointer;touch-action:manipulation;-webkit-tap-highlight-color:transparent;transition:background .16s,color .16s,transform .16s}.section-toggle-button:hover{background:var(--surface-3);color:var(--accent)}.section-toggle-button:active{transform:scale(.95)}.section-toggle-glyph{display:block;font-size:19px;line-height:1;transition:transform .16s}.section-toggle-button[aria-expanded="false"] .section-toggle-glyph{transform:rotate(-90deg)}
+@media(max-width:820px){.section-toggle-button{width:44px;height:44px;min-width:44px}.overview-section-heading{margin-bottom:8px}}
+@media(max-width:430px){.queue-tools .search-wrap{width:calc(100% - 96px)}}

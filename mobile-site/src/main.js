@@ -212,8 +212,11 @@ function renderShell() {
           </div>
         </header>
         <main class="dashboard">
+          <section class="overview-section" id="overview-section">
+            <div class="overview-section-heading"><span class="eyebrow">GENEL BAKIŞ</span><button type="button" class="section-toggle-button" data-section-toggle="overview-content" data-label-collapse="Genel bölümünü daralt" data-label-expand="Genel bölümünü genişlet" aria-controls="overview-content" aria-expanded="true" aria-label="Genel bölümünü daralt" title="Genel bölümünü daralt"><span class="section-toggle-glyph" aria-hidden="true">⌄</span></button></div>
+            <div class="section-collapse-content" id="overview-content">
           <section class="hero-card enter">
-            <div class="hero-copy"><div class="hero-kicker">${icon('spark', 15)} HER ŞEY TEK YERDE</div><h1>Reels akışın,<br><span>tek ekranda.</span></h1><p>Linkleri ekle, kuyruğu takip et. Daha önce eklenen Reel tekrar sıraya girmez.</p><a class="button button-light" href="#add-section">${icon('plus', 18)} Reel ekle</a></div>
+            <div class="hero-copy"><div class="hero-kicker">${icon('spark', 15)} HER ŞEY TEK YERDE</div><h1>Reels akışın,<br><span>tek ekranda.</span></h1><p>Linkleri ekle, kuyruğu takip et. Daha önce eklenen Reel tekrar sıraya girmez.</p><a class="button button-light" href="#add-section" data-scroll="add-section">${icon('plus', 18)} Reel ekle</a></div>
             <div class="hero-orbit orbit-one"></div><div class="hero-orbit orbit-two"></div><div class="hero-sticker"><span class="sticker-play">▶</span><span>REELS<br><b>TRANSFER</b></span></div>
           </section>
           <section class="stats-grid" aria-label="Kuyruk özeti">
@@ -222,9 +225,12 @@ function renderShell() {
             <article class="stat-card stat-done"><div class="stat-top"><span>Yayınlandı</span><span class="stat-icon">${icon('check', 18)}</span></div><strong id="stat-published">—</strong><small>Tamamlananlar</small></article>
             <article class="stat-card stat-failed"><div class="stat-top"><span>Kontrol gerekli</span><span class="stat-icon">${icon('alert', 18)}</span></div><strong id="stat-failed">—</strong><small>Hata alan içerikler</small></article>
           </section>
+            </div>
+          </section>
           <section class="content-grid content-grid-single">
             <article class="panel add-panel" id="add-section">
-              <div class="panel-heading"><div><span class="eyebrow">YENİ İÇERİK</span><h2>Kuyruğa Reel ekle</h2></div><span class="heading-icon">${icon('plus', 20)}</span></div>
+              <div class="panel-heading"><div><span class="eyebrow">YENİ İÇERİK</span><h2>Kuyruğa Reel ekle</h2></div><div class="panel-heading-actions"><span class="heading-icon">${icon('plus', 20)}</span><button type="button" class="section-toggle-button" data-section-toggle="add-content" data-label-collapse="Reel ekle bölümünü daralt" data-label-expand="Reel ekle bölümünü genişlet" aria-controls="add-content" aria-expanded="true" aria-label="Reel ekle bölümünü daralt" title="Reel ekle bölümünü daralt"><span class="section-toggle-glyph" aria-hidden="true">⌄</span></button></div></div>
+              <div class="section-collapse-content" id="add-content">
               <p class="panel-copy">Her satıra bir Instagram Reel bağlantısı yaz. URL’leri ekleyince her bağlantı için hesap, açıklama ve kapak seçimi görünür. Ayrı açıklama alanı, bu sefer eklediğin tüm Reels'lere uygulanır.</p>
               <form id="add-form">
                 <label class="sr-only" for="reel-input">Reel bağlantıları</label>
@@ -243,10 +249,12 @@ function renderShell() {
                 <button class="button button-primary button-wide" type="submit" id="add-submit">${icon('plus', 18)} Kuyruğa ekle <span class="button-arrow">→</span></button>
               </form>
               <div class="privacy-note">${icon('check', 15)} URL’ler başarıyla kuyruğa eklenince temizlenir; açıklama taslağın bu cihazda, kayıtlı şablonların hesabında bulutta saklanır. Instagram parolan burada istenmez.</div>
+              </div>
             </article>
           </section>
           <section class="panel video-library-panel" id="video-library-section">
-            <div class="panel-heading"><div><span class="eyebrow">ÖZEL BULUT ARŞİVİ</span><h2>Video arşivi <span id="video-library-count" class="queue-count">0</span></h2></div><span class="heading-icon">${icon('play', 19)}</span></div>
+            <div class="panel-heading"><div><span class="eyebrow">ÖZEL BULUT ARŞİVİ</span><h2>Video arşivi <span id="video-library-count" class="queue-count">0</span></h2></div><div class="panel-heading-actions"><span class="heading-icon">${icon('play', 19)}</span><button type="button" class="section-toggle-button" data-section-toggle="video-library-content" data-label-collapse="Video arşivi bölümünü daralt" data-label-expand="Video arşivi bölümünü genişlet" aria-controls="video-library-content" aria-expanded="true" aria-label="Video arşivi bölümünü daralt" title="Video arşivi bölümünü daralt"><span class="section-toggle-glyph" aria-hidden="true">⌄</span></button></div></div>
+            <div class="section-collapse-content" id="video-library-content">
             <p class="panel-copy">Instagram Reel bağlantısını ekle; ReelFlow videoyu bulut işçisiyle özel arşivine indirir. Telefona indirmeden oynatabilir, istediğin zaman kuyruğa gönderebilirsin.</p>
             <div id="video-library-quota" class="video-library-quota">
               <div class="video-storage-usage-row"><div><strong id="video-storage-remaining">Depolama ölçülüyor…</strong><small id="video-storage-detail">Supabase Free proje kotası · 1 GB</small></div><button type="button" class="mini-button" data-action="refresh-storage-usage">Yenile</button></div>
@@ -272,12 +280,15 @@ function renderShell() {
               <div id="video-import-status-list" class="video-history-list" aria-live="polite"></div>
             </section>
             <div id="video-library-list" class="video-library-list"><div class="loading-row"><span class="spinner"></span> Video arşivi yükleniyor…</div></div>
+            </div>
           </section>
           <section class="panel queue-panel" id="queue-section">
-            <div class="queue-heading"><div><span class="eyebrow">İÇERİK MERKEZİ</span><h2>Reel kuyruğu <span id="queue-count" class="queue-count">0</span></h2></div><div class="queue-tools"><div class="search-wrap">${icon('search', 17)}<input type="search" id="queue-search" placeholder="Kuyrukta ara" aria-label="Kuyrukta ara" /></div><button class="icon-button refresh-button" id="refresh-button" title="Yenile" aria-label="Kuyruğu yenile">${icon('refresh', 17)}</button></div></div>
+            <div class="queue-heading"><div><span class="eyebrow">İÇERİK MERKEZİ</span><h2>Reel kuyruğu <span id="queue-count" class="queue-count">0</span></h2></div><div class="queue-tools"><div class="search-wrap">${icon('search', 17)}<input type="search" id="queue-search" placeholder="Kuyrukta ara" aria-label="Kuyrukta ara" /></div><button class="icon-button refresh-button" id="refresh-button" title="Yenile" aria-label="Kuyruğu yenile">${icon('refresh', 17)}</button><button type="button" class="section-toggle-button" data-section-toggle="queue-content" data-label-collapse="Reel kuyruğu bölümünü daralt" data-label-expand="Reel kuyruğu bölümünü genişlet" aria-controls="queue-content" aria-expanded="true" aria-label="Reel kuyruğu bölümünü daralt" title="Reel kuyruğu bölümünü daralt"><span class="section-toggle-glyph" aria-hidden="true">⌄</span></button></div></div>
+            <div class="section-collapse-content" id="queue-content">
             <div class="filter-row" role="tablist" aria-label="Kuyruk filtresi"><button class="filter-chip active" data-filter="all">Tümü</button><button class="filter-chip" data-filter="queued">Kuyrukta</button><button class="filter-chip" data-filter="processing">Yayınlanıyor</button><button class="filter-chip" data-filter="published">Yayınlandı</button><button class="filter-chip" data-filter="unavailable">Instagram’da yok</button><button class="filter-chip" data-filter="failed">Hata</button></div>
             <div id="queue-list" class="queue-list"><div class="loading-row"><span class="spinner"></span> Kuyruk yükleniyor…</div></div>
             <div id="queue-footer" class="queue-footer"></div>
+            </div>
           </section>
           <details class="panel worker-panel connection-panel" id="settings-section">
             <summary class="connection-summary">
@@ -1664,9 +1675,24 @@ async function addToQueue(form) {
   if (failed && invalidSample) toast(invalidSample, 'warn');
 }
 
+function setSectionExpanded(button, expanded) {
+  const content = document.getElementById(button.dataset.sectionToggle);
+  if (!content) return false;
+  content.hidden = !expanded;
+  button.setAttribute('aria-expanded', String(expanded));
+  const label = expanded ? button.dataset.labelCollapse : button.dataset.labelExpand;
+  button.setAttribute('aria-label', label);
+  button.title = label;
+  return true;
+}
+
 async function handleClick(event) {
   const button = event.target.closest('button, a');
   if (!button) return;
+  if (button.dataset.sectionToggle) {
+    setSectionExpanded(button, button.getAttribute('aria-expanded') !== 'true');
+    return;
+  }
   if (button.matches('.signout')) {
     await supabase.auth.signOut();
     return;
@@ -1773,6 +1799,9 @@ async function handleClick(event) {
   if (button.dataset.scroll) {
     event.preventDefault();
     const target = document.getElementById(button.dataset.scroll);
+    const collapsibleSection = document.getElementById(button.dataset.scroll === 'top' ? 'overview-section' : button.dataset.scroll);
+    const sectionToggle = collapsibleSection?.querySelector('[data-section-toggle]');
+    if (sectionToggle) setSectionExpanded(sectionToggle, true);
     if (target?.tagName === 'DETAILS') target.open = true;
     const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     target?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });

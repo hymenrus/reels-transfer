@@ -128,8 +128,17 @@ test('the original page layout is restored and the bottom quick navigation follo
   assert.match(source, /class="content-grid content-grid-single"/);
   assert.match(mobileNav, /mobile-nav-item active" aria-current="location" data-scroll="top"/);
   assert.doesNotMatch(source, /<details class="panel dashboard-section/);
+  assert.equal((source.match(/data-section-toggle="/g) || []).length, 4);
+  for (const contentId of ['overview-content', 'add-content', 'video-library-content', 'queue-content']) {
+    assert.match(source, new RegExp(`data-section-toggle="[^"]+"[^>]*aria-controls="${contentId}" aria-expanded="true"`));
+    assert.match(source, new RegExp(`id="${contentId}"`));
+  }
+  assert.match(source, /id="settings-section"/);
+  assert.match(source, /function setSectionExpanded\(button, expanded\)/);
+  assert.match(source, /content\.hidden = !expanded/);
   assert.match(scrollHandler, /target\?\.scrollIntoView/);
   assert.match(scrollHandler, /prefers-reduced-motion: reduce/);
+  assert.match(scrollHandler, /setSectionExpanded\(sectionToggle, true\)/);
   assert.match(scrollHandler, /querySelectorAll\(selector\)/);
   assert.match(scrollHandler, /setAttribute\('aria-current', 'location'\)/);
   assert.match(scrollHandler, /removeAttribute\('aria-current'\)/);
