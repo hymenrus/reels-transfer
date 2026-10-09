@@ -34,7 +34,8 @@ test('successful queue add clears URLs but retains and persists the caption draf
   assert.match(successBranch, /saveReelDraft\(\)/);
   assert.doesNotMatch(successBranch, /(?:captionInput|caption-input)\.value\s*=\s*''/);
   assert.match(source, /setCaptionForAccount\(/);
-  assert.match(source, /setTagsForAccount\(/);
+  assert.doesNotMatch(source, /caption-template-tags|data-video-tags|setTagsForAccount\(|tagsForAccount\(/);
+  assert.doesNotMatch(source, /Hashtag|hashtag|@mention bloğu/);
   assert.match(source, /captionForReelUrl\(/);
   assert.match(source, /instagram_caption_templates/);
   assert.match(addToQueue, /p_caption:\s*captionByShortcode\.get\(item\.shortcodeKey\)/);
@@ -106,21 +107,32 @@ test('per-URL cover selector stays visible on mobile before an Instagram account
   assert.match(source, /URL’leri ekleyince her bağlantı için hesap, açıklama ve kapak seçimi görünür/);
 });
 
-test('cloud connections are collapsed at the dashboard bottom and open from Status navigation', () => {
-  const queuePosition = source.indexOf('<section class="panel queue-panel" id="queue-section">');
-  const connectionPosition = source.indexOf('<details class="panel worker-panel connection-panel" id="settings-section">');
+test('five dashboard sections are vertically ordered, independently collapsible, and the bottom dock is removed', () => {
+  const sectionIds = ['general-section', 'add-section', 'video-library-section', 'queue-section', 'settings-section'];
+  const sectionPositions = sectionIds.map((id) => source.indexOf(`id="${id}"`));
+  const queuePosition = sectionPositions[3];
+  const connectionPosition = sectionPositions[4];
   const footerPosition = source.indexOf('<footer class="app-footer">');
+  const sideNavStart = source.indexOf('<nav class="side-nav"');
+  const sideNavEnd = source.indexOf('</nav>', sideNavStart);
+  const sideNav = source.slice(sideNavStart, sideNavEnd);
+  const navPositions = sectionIds.map((id) => sideNav.indexOf(`data-scroll="${id}"`));
   const scrollStart = source.indexOf('if (button.dataset.scroll) {');
   const scrollEnd = source.indexOf('if (button.dataset.filter)', scrollStart);
   const scrollHandler = source.slice(scrollStart, scrollEnd);
 
+  assert.ok(sectionPositions.every((position, index) => position >= 0 && (index === 0 || position > sectionPositions[index - 1])));
+  assert.ok(navPositions.every((position, index) => position >= 0 && (index === 0 || position > navPositions[index - 1])));
   assert.ok(queuePosition >= 0 && connectionPosition > queuePosition && footerPosition > connectionPosition);
-  assert.match(source, /<summary class="connection-summary">/);
+  assert.ok(sectionIds.every((id) => source.includes(`id="${id}"`)));
+  assert.equal((source.match(/<details\b/g) || []).length, (source.match(/<\/details>/g) || []).length);
+  assert.equal((source.match(/<summary\b/g) || []).length, (source.match(/<\/summary>/g) || []).length);
+  assert.doesNotMatch(source, /<nav class="mobile-nav"/);
   assert.match(scrollHandler, /if \(target\?\.tagName === 'DETAILS'\) target\.open = true/);
   assert.match(scrollHandler, /prefers-reduced-motion: reduce/);
   assert.match(source, /connection-summary-meta/);
-  assert.match(styles, /\.content-grid-single\s*\{/);
-  assert.match(styles, /\.connection-panel>summary\s*\{/);
+  assert.match(styles, /\.dashboard-section>summary\.dashboard-section-summary/);
+  assert.match(styles, /\.section-disclosure-chevron/);
   assert.match(styles, /@media\(max-width:820px\)/);
   assert.match(styles, /@media\(prefers-reduced-motion:reduce\)/);
 });

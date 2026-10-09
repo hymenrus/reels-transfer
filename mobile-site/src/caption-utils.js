@@ -53,9 +53,9 @@ export function composeCaptionWithTags(caption, tags) {
   return `${base}\n\n${suffix}`;
 }
 
-export function captionForReelUrl(itemCaption, sharedCaption, sharedTags, selectedTemplate = null) {
-  if (selectedTemplate) return composeCaptionWithTags(selectedTemplate.caption, selectedTemplate.tags);
-  return composeCaptionWithTags(sharedCaption || itemCaption, sharedTags);
+export function captionForReelUrl(itemCaption, sharedCaption, _sharedTags, selectedTemplate = null) {
+  const caption = selectedTemplate ? selectedTemplate.caption : (sharedCaption || itemCaption);
+  return String(caption ?? '').trim();
 }
 
 export function validateCaptionTemplate(name, caption, tags = '') {

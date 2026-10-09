@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, PUBLISHER_SETUP_READY } from './config.js';
 import { estimateQueueEta, NO_REEL_COVER_IMAGE, pruneReelAccountTargets, pruneReelCaptionTemplateSelections, pruneReelCoverImageSelections, resolveReelTargetAssignments, selectInstagramAccount, setReelAccountTarget, setReelCoverImageSelection } from './queue-utils.js';
-import { captionForAccount, captionForReelUrl, hasReelDraftContent, setCaptionForAccount, setTagsForAccount, tagsForAccount, validateCaptionTemplate } from './caption-utils.js';
+import { captionForAccount, captionForReelUrl, hasReelDraftContent, setCaptionForAccount, validateCaptionTemplate } from './caption-utils.js';
 import { parseReelLines } from './url-utils.js';
 import { formatVideoFileSize, mapWithConcurrency, MAX_VIDEO_IMPORTS_PER_BATCH, VIDEO_IMPORT_CONCURRENCY, VIDEO_STORAGE_BUCKET, VIDEO_COVER_BUCKET, MAX_COVER_IMAGES_PER_BATCH, coverImageStoragePath, createCoverImageId, validateCoverImageFile } from './uploaded-video-utils.js';
 import './styles.css';
@@ -97,14 +97,12 @@ function saveReelDraft() {
   const captionInput = document.querySelector('#caption-input');
   if (!key || !urlInput || !captionInput) return;
   const captionDraft = setCaptionForAccount({ ...readReelDraft(), urls: urlInput.value }, state.instagram?.id, captionInput.value);
-  const tagsInput = document.querySelector('#caption-template-tags');
-  const tagDraft = setTagsForAccount(captionDraft, state.instagram?.id, tagsInput?.value || '');
   const items = parseReelLines(urlInput.value).items;
   state.reelAccountTargets = pruneReelAccountTargets(items, state.reelAccountTargets);
   state.reelCaptionTemplateSelections = pruneReelCaptionTemplateSelections(items, state.reelCaptionTemplateSelections);
   state.reelCoverImageSelections = pruneReelCoverImageSelections(items, state.reelCoverImageSelections);
   const draft = {
-    ...tagDraft,
+    ...captionDraft,
     reelAccountTargets: { ...state.reelAccountTargets },
     reelCaptionTemplateSelections: { ...state.reelCaptionTemplateSelections },
     reelCoverImageSelections: { ...state.reelCoverImageSelections },
@@ -127,10 +125,8 @@ function restoreReelDraft() {
     state.reelCoverImageSelections = pruneReelCoverImageSelections(items, draft.reelCoverImageSelections);
     const urlInput = document.querySelector('#reel-input');
     const captionInput = document.querySelector('#caption-input');
-    const tagsInput = document.querySelector('#caption-template-tags');
     if (urlInput && typeof draft.urls === 'string') urlInput.value = draft.urls;
     if (captionInput) captionInput.value = captionForAccount(draft, state.instagram?.id).slice(0, 2200);
-    if (tagsInput) tagsInput.value = tagsForAccount(draft, state.instagram?.id).slice(0, 2200);
     updateInputCounter(urlInput?.value || '');
     renderReelTargetAssignments();
     if (state.instagram?.id) saveReelDraft();
@@ -194,10 +190,11 @@ function renderShell() {
         <a class="brand-lockup" href="#top" aria-label="ReelFlow ana sayfa"><span class="brand-mark">R</span><span>ReelFlow<span class="brand-sub">TRANSFER STUDIO</span></span></a>
         <div class="sidebar-label">ÇALIŞMA ALANI</div>
         <nav class="side-nav" aria-label="Ana menü">
-          <button class="nav-item active" data-scroll="top">${icon('grid')}<span>Genel bakış</span></button>
-          <button class="nav-item" data-scroll="queue-section">${icon('reel')}<span>Reel kuyruğu</span><span id="nav-count" class="nav-count">0</span></button>
-          <button class="nav-item" data-scroll="video-library-section">${icon('play')}<span>Video arşivi</span><span id="video-nav-count" class="nav-count">0</span></button>
-          <button class="nav-item" data-scroll="settings-section">${icon('settings')}<span>Bağlantı durumu</span></button>
+          <button class="nav-item active" data-scroll="general-section">${icon('grid')}<span>Genel</span></button>
+          <button class="nav-item" data-scroll="add-section">${icon('plus')}<span>Reel ekle</span></button>
+          <button class="nav-item" data-scroll="video-library-section">${icon('play')}<span>Arşiv</span><span id="video-nav-count" class="nav-count">0</span></button>
+          <button class="nav-item" data-scroll="queue-section">${icon('reel')}<span>Kuyruk</span><span id="nav-count" class="nav-count">0</span></button>
+          <button class="nav-item" data-scroll="settings-section">${icon('settings')}<span>Durum</span></button>
         </nav>
         <div class="sidebar-bottom">
           <div class="worker-mini"><span class="live-dot"></span><div><strong>Bulut işçisi</strong><small>${PUBLISHER_SETUP_READY ? 'Bağlandı' : 'Kurulum bekliyor'}</small></div></div>
@@ -216,19 +213,24 @@ function renderShell() {
           </div>
         </header>
         <main class="dashboard">
-          <section class="hero-card enter">
-            <div class="hero-copy"><div class="hero-kicker">${icon('spark', 15)} HER ŞEY TEK YERDE</div><h1>Reels akışın,<br><span>tek ekranda.</span></h1><p>Linkleri ekle, kuyruğu takip et. Daha önce eklenen Reel tekrar sıraya girmez.</p><a class="button button-light" href="#add-section">${icon('plus', 18)} Reel ekle</a></div>
-            <div class="hero-orbit orbit-one"></div><div class="hero-orbit orbit-two"></div><div class="hero-sticker"><span class="sticker-play">▶</span><span>REELS<br><b>TRANSFER</b></span></div>
-          </section>
-          <section class="stats-grid" aria-label="Kuyruk özeti">
-            <article class="stat-card stat-total"><div class="stat-top"><span>Toplam Reel</span><span class="stat-icon">${icon('reel', 18)}</span></div><strong id="stat-total">—</strong><small>Kayıtlı içerik</small></article>
-            <article class="stat-card stat-queued"><div class="stat-top"><span>Kuyrukta</span><span class="stat-icon">${icon('clock', 18)}</span></div><strong id="stat-queued">—</strong><small>Sıradaki içerikler</small></article>
-            <article class="stat-card stat-done"><div class="stat-top"><span>Yayınlandı</span><span class="stat-icon">${icon('check', 18)}</span></div><strong id="stat-published">—</strong><small>Tamamlananlar</small></article>
-            <article class="stat-card stat-failed"><div class="stat-top"><span>Kontrol gerekli</span><span class="stat-icon">${icon('alert', 18)}</span></div><strong id="stat-failed">—</strong><small>Hata alan içerikler</small></article>
-          </section>
-          <section class="content-grid content-grid-single">
-            <article class="panel add-panel" id="add-section">
-              <div class="panel-heading"><div><span class="eyebrow">YENİ İÇERİK</span><h2>Kuyruğa Reel ekle</h2></div><span class="heading-icon">${icon('plus', 20)}</span></div>
+          <details class="panel dashboard-section overview-section" id="general-section" open>
+            <summary class="dashboard-section-summary"><span class="dashboard-section-title"><span class="eyebrow">GENEL</span><strong>Genel bakış</strong><small>Reel akışının özeti ve temel durum</small></span><span class="section-disclosure-chevron" aria-hidden="true">⌄</span></summary>
+            <div class="dashboard-section-body overview-section-body">
+              <section class="hero-card enter">
+                <div class="hero-copy"><div class="hero-kicker">${icon('spark', 15)} HER ŞEY TEK YERDE</div><h1>Reels akışın,<br><span>tek ekranda.</span></h1><p>Linkleri ekle, kuyruğu takip et. Daha önce eklenen Reel tekrar sıraya girmez.</p><a class="button button-light" href="#add-section" data-scroll="add-section">${icon('plus', 18)} Reel ekle</a></div>
+                <div class="hero-orbit orbit-one"></div><div class="hero-orbit orbit-two"></div><div class="hero-sticker"><span class="sticker-play">▶</span><span>REELS<br><b>TRANSFER</b></span></div>
+              </section>
+              <section class="stats-grid" aria-label="Kuyruk özeti">
+                <article class="stat-card stat-total"><div class="stat-top"><span>Toplam Reel</span><span class="stat-icon">${icon('reel', 18)}</span></div><strong id="stat-total">—</strong><small>Kayıtlı içerik</small></article>
+                <article class="stat-card stat-queued"><div class="stat-top"><span>Kuyrukta</span><span class="stat-icon">${icon('clock', 18)}</span></div><strong id="stat-queued">—</strong><small>Sıradaki içerikler</small></article>
+                <article class="stat-card stat-done"><div class="stat-top"><span>Yayınlandı</span><span class="stat-icon">${icon('check', 18)}</span></div><strong id="stat-published">—</strong><small>Tamamlananlar</small></article>
+                <article class="stat-card stat-failed"><div class="stat-top"><span>Kontrol gerekli</span><span class="stat-icon">${icon('alert', 18)}</span></div><strong id="stat-failed">—</strong><small>Hata alan içerikler</small></article>
+              </section>
+            </div>
+          </details>
+          <details class="panel dashboard-section add-panel" id="add-section" open>
+            <summary class="dashboard-section-summary"><span class="dashboard-section-title"><span class="eyebrow">YENİ İÇERİK</span><strong>Kuyruğa Reel ekle</strong><small>URL, hedef hesap, açıklama ve kapak seçimi</small></span><span class="section-disclosure-chevron" aria-hidden="true">⌄</span></summary>
+            <div class="dashboard-section-body add-section-body">
               <p class="panel-copy">Her satıra bir Instagram Reel bağlantısı yaz. URL’leri ekleyince her bağlantı için hesap, açıklama ve kapak seçimi görünür. Ayrı açıklama alanı, bu sefer eklediğin tüm Reels'lere uygulanır.</p>
               <form id="add-form">
                 <label class="sr-only" for="reel-input">Reel bağlantıları</label>
@@ -241,18 +243,17 @@ function renderShell() {
                   <div class="caption-template-heading"><strong>Kayıtlı açıklama şablonları</strong><small id="caption-template-status" class="caption-template-status" role="status" aria-live="polite">ReelFlow hesabı yükleniyor…</small></div>
                   <div class="caption-template-select-row"><label class="sr-only" for="caption-template-select">Açıklama şablonu seç</label><select id="caption-template-select" disabled><option value="">Şablon seç…</option></select><button type="button" id="delete-caption-template" class="caption-template-delete" disabled>Seçileni sil</button></div>
                   <div class="caption-template-save-row"><label class="sr-only" for="caption-template-name">Şablon adı</label><input id="caption-template-name" type="text" maxlength="60" placeholder="Şablon adı, ör. Kampanya" disabled /><button type="button" id="save-caption-template" class="button button-primary caption-template-save" disabled>Açıklamayı kaydet</button></div>
-                  <label for="caption-template-tags">Hashtag / @mention bloğu <span class="muted">(isteğe bağlı)</span></label>
-                  <textarea id="caption-template-tags" rows="2" maxlength="2200" placeholder="#reels #urunadi @marka" disabled></textarea>
-                  <small class="caption-template-note">Şablonlar aynı ReelFlow hesabındaki tüm Instagram hesaplarında ortaktır. Hashtag/@mention bloğu açıklamanın sonuna eklenir; videonun üzerine kişi etiketi koymaz.</small>
+                  <small class="caption-template-note">Şablonlar aynı ReelFlow hesabındaki tüm Instagram hesaplarında ortaktır.</small>
                 </section>
                 <label class="rights-check"><input type="checkbox" id="rights-confirm" /><span>Bu videoları paylaşma hakkım var veya izin aldım.</span></label>
                 <button class="button button-primary button-wide" type="submit" id="add-submit">${icon('plus', 18)} Kuyruğa ekle <span class="button-arrow">→</span></button>
               </form>
               <div class="privacy-note">${icon('check', 15)} URL’ler başarıyla kuyruğa eklenince temizlenir; açıklama taslağın bu cihazda, kayıtlı şablonların hesabında bulutta saklanır. Instagram parolan burada istenmez.</div>
-            </article>
-          </section>
-          <section class="panel video-library-panel" id="video-library-section">
-            <div class="panel-heading"><div><span class="eyebrow">ÖZEL BULUT ARŞİVİ</span><h2>Video arşivi <span id="video-library-count" class="queue-count">0</span></h2></div><span class="heading-icon">${icon('play', 19)}</span></div>
+            </div>
+          </details>
+          <details class="panel dashboard-section video-library-panel" id="video-library-section" open>
+            <summary class="dashboard-section-summary"><span class="dashboard-section-title"><span class="eyebrow">ÖZEL BULUT ARŞİVİ</span><strong>Video arşivi <span id="video-library-count" class="queue-count">0</span></strong><small>Videolar, özel depolama, kapaklar ve indirme geçmişi</small></span><span class="section-disclosure-chevron" aria-hidden="true">⌄</span></summary>
+            <div class="dashboard-section-body video-library-section-body">
             <p class="panel-copy">Instagram Reel bağlantısını ekle; ReelFlow videoyu bulut işçisiyle özel arşivine indirir. Telefona indirmeden oynatabilir, istediğin zaman kuyruğa gönderebilirsin.</p>
             <div id="video-library-quota" class="video-library-quota">
               <div class="video-storage-usage-row"><div><strong id="video-storage-remaining">Depolama ölçülüyor…</strong><small id="video-storage-detail">Supabase Free proje kotası · 1 GB</small></div><button type="button" class="mini-button" data-action="refresh-storage-usage">Yenile</button></div>
@@ -278,19 +279,23 @@ function renderShell() {
               <div id="video-import-status-list" class="video-history-list" aria-live="polite"></div>
             </section>
             <div id="video-library-list" class="video-library-list"><div class="loading-row"><span class="spinner"></span> Video arşivi yükleniyor…</div></div>
-          </section>
-          <section class="panel queue-panel" id="queue-section">
-            <div class="queue-heading"><div><span class="eyebrow">İÇERİK MERKEZİ</span><h2>Reel kuyruğu <span id="queue-count" class="queue-count">0</span></h2></div><div class="queue-tools"><div class="search-wrap">${icon('search', 17)}<input type="search" id="queue-search" placeholder="Kuyrukta ara" aria-label="Kuyrukta ara" /></div><button class="icon-button refresh-button" id="refresh-button" title="Yenile" aria-label="Kuyruğu yenile">${icon('refresh', 17)}</button></div></div>
+            </div>
+          </details>
+          <details class="panel dashboard-section queue-panel" id="queue-section" open>
+            <summary class="dashboard-section-summary"><span class="dashboard-section-title"><span class="eyebrow">İÇERİK MERKEZİ</span><strong>Reel kuyruğu <span id="queue-count" class="queue-count">0</span></strong><small>Yayın sırası, durumlar ve hata kontrolleri</small></span><span class="section-disclosure-chevron" aria-hidden="true">⌄</span></summary>
+            <div class="dashboard-section-body queue-section-body">
+            <div class="queue-tools"><div class="search-wrap">${icon('search', 17)}<input type="search" id="queue-search" placeholder="Kuyrukta ara" aria-label="Kuyrukta ara" /></div><button class="icon-button refresh-button" id="refresh-button" title="Yenile" aria-label="Kuyruğu yenile">${icon('refresh', 17)}</button></div>
             <div class="filter-row" role="tablist" aria-label="Kuyruk filtresi"><button class="filter-chip active" data-filter="all">Tümü</button><button class="filter-chip" data-filter="queued">Kuyrukta</button><button class="filter-chip" data-filter="processing">Yayınlanıyor</button><button class="filter-chip" data-filter="published">Yayınlandı</button><button class="filter-chip" data-filter="unavailable">Instagram’da yok</button><button class="filter-chip" data-filter="failed">Hata</button></div>
             <div id="queue-list" class="queue-list"><div class="loading-row"><span class="spinner"></span> Kuyruk yükleniyor…</div></div>
             <div id="queue-footer" class="queue-footer"></div>
-          </section>
-          <details class="panel worker-panel connection-panel" id="settings-section">
-            <summary class="connection-summary">
+            </div>
+          </details>
+          <details class="panel dashboard-section worker-panel connection-panel" id="settings-section">
+            <summary class="dashboard-section-summary connection-summary">
               <span class="connection-summary-copy"><span class="eyebrow">YAYIN DURUMU</span><strong>Bulut bağlantıları</strong><small>Instagram hesabı ve yayın altyapısı</small></span>
               <span class="connection-summary-meta"><span class="service-status ${PUBLISHER_SETUP_READY ? 'good' : 'pending'}">${PUBLISHER_SETUP_READY ? 'Hazır' : 'İncele'}</span><span class="connection-chevron" aria-hidden="true">⌄</span></span>
             </summary>
-            <div class="connection-body">
+            <div class="dashboard-section-body connection-body">
               <div class="service-row"><span class="service-logo supabase-logo">S</span><div><strong>Supabase</strong><small>Güvenli kuyruk ve oturum</small></div><span class="service-status good">Bağlı</span></div>
               <div id="instagram-account-card" class="instagram-account-card"><span class="spinner"></span> Instagram bağlantısı kontrol ediliyor…</div>
               <div class="service-row"><span class="service-logo github-logo">GH</span><div><strong>GitHub Actions</strong><small>Bilgisayar kapalıyken işlem</small></div><span class="service-status ${PUBLISHER_SETUP_READY ? 'good' : 'pending'}">${PUBLISHER_SETUP_READY ? 'Hazır' : 'Kurulum gerekli'}</span></div>
@@ -300,7 +305,6 @@ function renderShell() {
           </details>
           <footer class="app-footer"><span>ReelFlow <span class="footer-dot">•</span> Mobil uyumlu web uygulaması</span><span>Instagram API üzerinden, iznin olan içerikler için</span></footer>
         </main>
-        <nav class="mobile-nav" aria-label="Alt menü"><button class="mobile-nav-item active" data-scroll="top">${icon('grid', 20)}<span>Genel</span></button><button class="mobile-nav-item" data-scroll="queue-section">${icon('reel', 20)}<span>Kuyruk</span></button><button class="mobile-nav-item" data-scroll="video-library-section">${icon('play', 20)}<span>Arşiv</span></button><button class="mobile-nav-item" data-scroll="add-section">${icon('plus', 20)}<span>Ekle</span></button><button class="mobile-nav-item" data-scroll="settings-section">${icon('settings', 20)}<span>Durum</span></button></nav>
       </div>
     </div>
     <div id="toast-host" class="toast-host" aria-live="polite"></div>`;
@@ -380,7 +384,7 @@ function renderReelTargetAssignments() {
   }).join('');
   const coverAction = state.videoCoverImages.length
     ? `${state.videoCoverImages.length} kayıtlı kapak`
-    : '<a href="#video-library-section">Arşive kapak yükle →</a>';
+    : '<a href="#video-library-section" data-scroll="video-library-section">Arşive kapak yükle →</a>';
   panel.innerHTML = `<div class="reel-target-heading"><strong>Her Reel için hesap, açıklama ve kapak</strong><small>Her URL’ye ayrı hesap ve açıklama seçebilirsin. Kapak seçmezsen arşivindeki az kullanılmış JPEG’lerden rastgele atanır; tüm kapaklar sırayla kullanılmadan aynı kapak tekrar seçilmez. İstersen URL’ye özel kapak seç veya videonun karesini kullan. Kapak görselleri kütüphanede saklanır; ${coverAction}. “Genel açıklama” seçiliyse üstteki ortak açıklama uygulanır.</small></div><div class="reel-target-list">${rows}</div>`;
 }
 function updateStats() {
@@ -420,7 +424,7 @@ function renderQueue() {
     return filterMatch && queryMatch;
   });
   if (!filtered.length) {
-    list.innerHTML = `<div class="empty-state"><div class="empty-art">${icon('reel', 28)}</div><strong>${state.rows.length ? 'Bu filtrede içerik yok' : 'Kuyruk henüz boş'}</strong><p>${state.rows.length ? 'Başka bir durum filtresi seçebilirsin.' : 'İlk Reel bağlantını ekle; burada durumunu takip edersin.'}</p>${state.rows.length ? '' : '<a class="text-button" href="#add-section">Reel ekle →</a>'}</div>`;
+    list.innerHTML = `<div class="empty-state"><div class="empty-art">${icon('reel', 28)}</div><strong>${state.rows.length ? 'Bu filtrede içerik yok' : 'Kuyruk henüz boş'}</strong><p>${state.rows.length ? 'Başka bir durum filtresi seçebilirsin.' : 'İlk Reel bağlantını ekle; burada durumunu takip edersin.'}</p>${state.rows.length ? '' : '<a class="text-button" href="#add-section" data-scroll="add-section">Reel ekle →</a>'}</div>`;
   } else {
     list.innerHTML = filtered.map((row, index) => {
       const unavailable = row.status === 'published' && row.is_deleted_on_instagram === true;
@@ -554,7 +558,7 @@ async function loadCaptionTemplates() {
   if (!userId) return;
 
   const { data, error } = await supabase.from('instagram_caption_templates')
-    .select('id,name,caption,tags,updated_at')
+    .select('id,name,caption,updated_at')
     .eq('user_id', userId)
     .order('updated_at', { ascending: false })
     .limit(100);
@@ -579,11 +583,9 @@ function renderCaptionTemplates() {
   else state.selectedCaptionTemplateId = '';
 
   const nameInput = document.querySelector('#caption-template-name');
-  const tagsInput = document.querySelector('#caption-template-tags');
   const saveButton = document.querySelector('#save-caption-template');
   const deleteButton = document.querySelector('#delete-caption-template');
   if (nameInput) nameInput.disabled = !hasUser || state.captionTemplatesLoading;
-  if (tagsInput) tagsInput.disabled = !hasUser || state.captionTemplatesLoading;
   if (saveButton) saveButton.disabled = !hasUser || state.captionTemplatesLoading;
   if (deleteButton) deleteButton.disabled = !hasUser || state.captionTemplatesLoading || !state.selectedCaptionTemplateId;
 
@@ -635,7 +637,6 @@ function saveVideoCardDraft(card) {
     templateId: card.querySelector('[data-video-template-select]')?.value || '',
     coverImageId: card.querySelector('[data-video-cover-select]')?.value || '',
     caption: card.querySelector('[data-video-caption]')?.value || '',
-    tags: card.querySelector('[data-video-tags]')?.value || '',
     rightsConfirmed: card.querySelector('[data-video-rights]')?.checked === true,
   };
   persistVideoDrafts();
@@ -903,7 +904,6 @@ function renderUploadedVideos() {
         <label class="video-card-field"><span>Açıklama şablonu</span><select data-video-template-select data-video-id="${escapeHtml(video.id)}" aria-label="${escapeHtml(video.original_filename)} açıklama şablonu"${state.captionTemplatesLoading ? ' disabled' : ''}>${staleTemplate}<option value=""${selectedTemplateId ? '' : ' selected'}>Şablon seç…</option>${templateOptions}</select></label>
         <label class="video-card-field video-card-cover-field"><span>Reels kapağı</span><select data-video-cover-select data-video-id="${escapeHtml(video.id)}" aria-label="${escapeHtml(video.original_filename)} Reels kapağı"${fileAvailable ? '' : ' disabled'}>${staleCoverOption}<option value=""${selectedCoverId ? '' : ' selected'}>Videonun karesini kullan</option>${coverOptions}</select><span class="video-cover-selected-preview" data-video-cover-preview>${coverPreview}</span></label>
         <label class="video-card-field video-card-caption"><span>Paylaşım açıklaması</span><textarea data-video-caption data-video-id="${escapeHtml(video.id)}" maxlength="2200" rows="2" placeholder="Bu video için açıklama…">${escapeHtml(draft.caption || '')}</textarea></label>
-        <label class="video-card-field video-card-caption"><span>Hashtag / @mention bloğu</span><textarea data-video-tags data-video-id="${escapeHtml(video.id)}" maxlength="2200" rows="2" placeholder="#reels @marka">${escapeHtml(draft.tags || '')}</textarea></label>
       </div>
       <label class="rights-check video-card-rights"><input type="checkbox" data-video-rights data-video-id="${escapeHtml(video.id)}"${draft.rightsConfirmed ? ' checked' : ''} /><span>Bu videoyu paylaşma hakkım var veya izin aldım.</span></label>
       <div class="video-card-actions"><button type="button" class="mini-button" data-action="preview-uploaded-video" data-id="${escapeHtml(video.id)}"${fileAvailable ? '' : ' disabled'}>${icon('play', 13)} ${fileAvailable ? 'Oynat' : 'Dosya silindi'}</button><button type="button" class="mini-button video-queue-button" data-action="queue-uploaded-video" data-id="${escapeHtml(video.id)}"${controlsDisabled}>Kuyruğa ekle</button><button type="button" class="mini-button mini-danger" data-action="delete-uploaded-video" data-id="${escapeHtml(video.id)}"${fileAvailable ? '' : ' disabled'}>Sil</button></div>
@@ -1204,7 +1204,6 @@ async function queueUploadedVideo(videoId) {
   const accountId = card.querySelector('[data-video-account-select]')?.value || '';
   const templateId = card.querySelector('[data-video-template-select]')?.value || '';
   const captionInput = card.querySelector('[data-video-caption]');
-  const tagsInput = card.querySelector('[data-video-tags]');
   const rights = card.querySelector('[data-video-rights]');
   const button = card.querySelector('[data-action="queue-uploaded-video"]');
   if (!state.instagramAccounts.some((account) => account.id === accountId && !account.disconnected_at)) {
@@ -1216,9 +1215,9 @@ async function queueUploadedVideo(videoId) {
     toast('Seçilen açıklama şablonu bulunamadı; başka bir şablon seç.', 'warn');
     return;
   }
-  const caption = captionForReelUrl('', captionInput?.value || '', tagsInput?.value || '', null);
+  const caption = String(captionInput?.value || '').trim();
   if (caption.length > 2200) {
-    toast('Açıklama ve hashtag bloğu birlikte 2200 karakter sınırını aşıyor.', 'warn');
+    toast('Açıklama 2200 karakter sınırını aşıyor.', 'warn');
     return;
   }
   if (!rights?.checked) {
@@ -1283,25 +1282,22 @@ async function saveCaptionTemplate() {
   const userId = state.session?.user?.id;
   const nameInput = document.querySelector('#caption-template-name');
   const captionInput = document.querySelector('#caption-input');
-  const tagsInput = document.querySelector('#caption-template-tags');
   const button = document.querySelector('#save-caption-template');
-  if (!userId || !nameInput || !captionInput || !tagsInput) {
+  if (!userId || !nameInput || !captionInput) {
     toast('Şablon kaydetmek için ReelFlow hesabına giriş yap.', 'warn');
     return;
   }
-  const valid = validateCaptionTemplate(nameInput.value, captionInput.value, tagsInput.value);
+  const valid = validateCaptionTemplate(nameInput.value, captionInput.value);
   if (!valid.ok) {
     const messages = {
       name_required: 'Şablonu kaydetmek için bir ad yaz.',
       name_too_long: 'Şablon adı en fazla 60 karakter olabilir.',
-      caption_required: 'Önce bir açıklama veya hashtag/@mention yaz.',
+      caption_required: 'Önce bir açıklama yaz.',
       caption_too_long: 'Açıklama en fazla 2200 karakter olabilir.',
-      tags_too_long: 'Hashtag/@mention bloğu en fazla 2200 karakter olabilir.',
-      combined_too_long: 'Açıklama ve etiketler birlikte Instagram sınırı olan 2200 karakteri aşıyor.',
+      combined_too_long: 'Açıklama Instagram sınırı olan 2200 karakteri aşıyor.',
     };
     toast(messages[valid.reason] || 'Şablon bilgilerini kontrol et.', 'warn');
     if (valid.reason.startsWith('name_')) nameInput.focus();
-    else if (valid.reason.startsWith('tags_')) tagsInput.focus();
     else captionInput.focus();
     return;
   }
@@ -1309,9 +1305,9 @@ async function saveCaptionTemplate() {
   const existing = state.captionTemplates.find((template) => template.name.toLocaleLowerCase('tr-TR') === valid.name.toLocaleLowerCase('tr-TR'));
   if (button) { button.disabled = true; button.textContent = 'Kaydediliyor…'; }
   const query = existing
-    ? supabase.from('instagram_caption_templates').update({ name: valid.name, caption: valid.caption, tags: valid.tags, updated_at: new Date().toISOString() }).eq('id', existing.id).eq('user_id', userId)
-    : supabase.from('instagram_caption_templates').insert({ user_id: userId, name: valid.name, caption: valid.caption, tags: valid.tags });
-  const { data, error } = await query.select('id,name,caption,tags,updated_at').single();
+    ? supabase.from('instagram_caption_templates').update({ name: valid.name, caption: valid.caption, updated_at: new Date().toISOString() }).eq('id', existing.id).eq('user_id', userId)
+    : supabase.from('instagram_caption_templates').insert({ user_id: userId, name: valid.name, caption: valid.caption });
+  const { data, error } = await query.select('id,name,caption,updated_at').single();
   if (button) button.textContent = 'Açıklamayı kaydet';
   renderCaptionTemplates();
   if (state.session?.user?.id !== userId) return;
@@ -1550,9 +1546,7 @@ async function addToQueue(form) {
   }
   const textarea = form.querySelector('#reel-input');
   const captionInput = form.querySelector('#caption-input');
-  const tagsInput = form.querySelector('#caption-template-tags');
   const sharedCaption = captionInput.value.trim();
-  const automaticTags = tagsInput?.value.trim() || '';
   const rights = form.querySelector('#rights-confirm');
   const parsed = parseReelLines(textarea.value);
   if (!parsed.items.length) {
@@ -1586,7 +1580,7 @@ async function addToQueue(form) {
   const captionByShortcode = new Map(parsed.items.map((item) => {
     const templateId = state.reelCaptionTemplateSelections[item.shortcodeKey];
     const template = templateId ? templateById.get(templateId) : null;
-    return [item.shortcodeKey, captionForReelUrl(item.caption, sharedCaption, automaticTags, template)];
+    return [item.shortcodeKey, captionForReelUrl(item.caption, sharedCaption, '', template)];
   }));
   const tooLongItem = parsed.items.find((item) => captionByShortcode.get(item.shortcodeKey).length > 2200);
   if (tooLongItem) {
@@ -1792,7 +1786,7 @@ async function handleClick(event) {
     if (target?.tagName === 'DETAILS') target.open = true;
     const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     target?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
-    document.querySelectorAll('.mobile-nav-item,.nav-item').forEach((node) => node.classList.toggle('active', node.dataset.scroll === button.dataset.scroll));
+    document.querySelectorAll('.nav-item').forEach((node) => node.classList.toggle('active', node.dataset.scroll === button.dataset.scroll));
     return;
   }
   if (button.dataset.filter) {
@@ -1926,8 +1920,8 @@ root.addEventListener('input', (event) => {
     renderReelTargetAssignments();
     saveReelDraft();
   }
-  if (event.target.id === 'caption-input' || event.target.id === 'caption-template-tags') saveReelDraft();
-  if (event.target.matches('[data-video-caption], [data-video-tags]')) saveVideoCardDraft(event.target.closest('[data-video-card]'));
+  if (event.target.id === 'caption-input') saveReelDraft();
+  if (event.target.matches('[data-video-caption]')) saveVideoCardDraft(event.target.closest('[data-video-card]'));
 });
 root.addEventListener('change', async (event) => {
   if (event.target.id === 'video-import-file') {
@@ -1964,7 +1958,6 @@ root.addEventListener('change', async (event) => {
     }
     if (template) {
       card.querySelector('[data-video-caption]').value = template.caption || '';
-      card.querySelector('[data-video-tags]').value = template.tags || '';
     }
     saveVideoCardDraft(card);
     return;
@@ -2027,9 +2020,7 @@ root.addEventListener('change', async (event) => {
     const nameInput = document.querySelector('#caption-template-name');
     if (nameInput) nameInput.value = template.name;
     const captionInput = document.querySelector('#caption-input');
-    const tagsInput = document.querySelector('#caption-template-tags');
     if (captionInput) captionInput.value = template.caption;
-    if (tagsInput) tagsInput.value = template.tags || '';
     saveReelDraft();
     renderCaptionTemplates();
     toast(`“${template.name}” açıklaması seçildi.`, 'success');

@@ -45,19 +45,19 @@ test('automatically appends hashtag and mention blocks exactly once', () => {
   assert.equal(composeCaptionWithTags('Açıklama', ''), 'Açıklama');
 });
 
-test('uses each URL’s selected caption template and tags, falling back to the shared draft when none is selected', () => {
+test('uses each URL’s selected description template and ignores legacy hashtag fields', () => {
   const campaign = { caption: 'Kampanya açıklaması', tags: '#kampanya @marka' };
   const launch = { caption: 'Yeni ürün yayında', tags: '#yenilik' };
   const templatesById = new Map([['campaign', campaign], ['launch', launch]]);
   const selections = { abc123: 'campaign', xyz456: 'launch' };
   const urls = [{ shortcodeKey: 'abc123' }, { shortcodeKey: 'xyz456' }];
   const captions = urls.map((item) => captionForReelUrl('', 'Genel açıklama', '#genel', templatesById.get(selections[item.shortcodeKey])));
-  assert.deepEqual(captions, ['Kampanya açıklaması\n\n#kampanya @marka', 'Yeni ürün yayında\n\n#yenilik']);
+  assert.deepEqual(captions, ['Kampanya açıklaması', 'Yeni ürün yayında']);
 
-  assert.equal(captionForReelUrl('Satır açıklaması', 'Genel açıklama', '#genel', campaign), 'Kampanya açıklaması\n\n#kampanya @marka');
-  assert.equal(captionForReelUrl('', '', '', launch), 'Yeni ürün yayında\n\n#yenilik');
-  assert.equal(captionForReelUrl('Satır açıklaması', 'Genel açıklama', '#genel', null), 'Genel açıklama\n\n#genel');
-  assert.equal(captionForReelUrl('Satır açıklaması', '', '#genel', null), 'Satır açıklaması\n\n#genel');
+  assert.equal(captionForReelUrl('Satır açıklaması', 'Genel açıklama', '#genel', campaign), 'Kampanya açıklaması');
+  assert.equal(captionForReelUrl('', '', '', launch), 'Yeni ürün yayında');
+  assert.equal(captionForReelUrl('Satır açıklaması', 'Genel açıklama', '#genel', null), 'Genel açıklama');
+  assert.equal(captionForReelUrl('Satır açıklaması', '', '#genel', null), 'Satır açıklaması');
 });
 
 test('validates template names, caption/tag lengths, and the final combined Instagram caption limit', () => {
