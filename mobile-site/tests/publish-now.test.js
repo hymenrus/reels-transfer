@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 const source = await readFile(new URL('../src/main.js', import.meta.url), 'utf8');
+const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
 
 test('Hemen Paylaş tek dokunuşta ilerler ve browser confirm penceresi göstermez', () => {
   const start = source.indexOf("if (button.dataset.action === 'publish-now')");
@@ -103,4 +104,23 @@ test('per-URL cover selector stays visible on mobile before an Instagram account
   assert.match(renderer, /kapak ve açıklama seçimini şimdi yapabilirsin/);
   assert.doesNotMatch(renderer, /if \(!connectedAccounts\.length\)[\s\S]*?return;/);
   assert.match(source, /URL’leri ekleyince her bağlantı için hesap, açıklama ve kapak seçimi görünür/);
+});
+
+test('cloud connections are collapsed at the dashboard bottom and open from Status navigation', () => {
+  const queuePosition = source.indexOf('<section class="panel queue-panel" id="queue-section">');
+  const connectionPosition = source.indexOf('<details class="panel worker-panel connection-panel" id="settings-section">');
+  const footerPosition = source.indexOf('<footer class="app-footer">');
+  const scrollStart = source.indexOf('if (button.dataset.scroll) {');
+  const scrollEnd = source.indexOf('if (button.dataset.filter)', scrollStart);
+  const scrollHandler = source.slice(scrollStart, scrollEnd);
+
+  assert.ok(queuePosition >= 0 && connectionPosition > queuePosition && footerPosition > connectionPosition);
+  assert.match(source, /<summary class="connection-summary">/);
+  assert.match(scrollHandler, /if \(target\?\.tagName === 'DETAILS'\) target\.open = true/);
+  assert.match(scrollHandler, /prefers-reduced-motion: reduce/);
+  assert.match(source, /connection-summary-meta/);
+  assert.match(styles, /\.content-grid-single\s*\{/);
+  assert.match(styles, /\.connection-panel>summary\s*\{/);
+  assert.match(styles, /@media\(max-width:820px\)/);
+  assert.match(styles, /@media\(prefers-reduced-motion:reduce\)/);
 });

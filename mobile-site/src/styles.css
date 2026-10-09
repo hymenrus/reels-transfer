@@ -82,3 +82,31 @@
 @media(max-width:430px){.video-storage-usage-row strong{font-size:12px}.video-cover-image-list{grid-template-columns:repeat(3,minmax(0,1fr))}.video-cover-item{padding:6px}.video-cover-selected-preview img{width:36px;height:60px}}
 
 .reel-cover-field{grid-column:2 / -1}.reel-cover-preview{display:flex;align-items:center;gap:7px;min-width:0;margin-top:2px}.reel-cover-preview img{width:26px;height:37px;flex:none;object-fit:cover;border:1px solid var(--line);border-radius:5px}.reel-cover-preview small,.reel-cover-note{overflow:hidden;color:var(--muted);font-size:8px;text-overflow:ellipsis;white-space:nowrap}.reel-target-heading a{color:var(--teal);font-weight:700}.reel-target-heading a:hover{text-decoration:underline}@media(max-width:560px){.reel-cover-field{grid-column:1}.reel-cover-preview small,.reel-cover-note{font-size:10px}}
+
+
+/* ReelFlow dashboard organization: focused entry column + compact bottom connection drawer */
+.content-grid-single{grid-template-columns:minmax(0,1fr)}
+.content-grid-single .add-panel{width:min(100%,1060px);margin-inline:auto}
+#add-section,#video-library-section,#queue-section,#settings-section{scroll-margin-top:18px}
+.connection-panel{margin:18px 0 4px;padding:0;overflow:hidden;scroll-margin-bottom:18px}
+.connection-panel>summary{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:74px;padding:13px 18px;list-style:none;cursor:pointer}
+.connection-panel>summary::-webkit-details-marker{display:none}
+.connection-panel>summary:focus-visible{outline:2px solid var(--accent);outline-offset:-3px}
+.connection-summary-copy{display:grid;gap:3px;min-width:0}
+.connection-summary-copy .eyebrow{margin:0;color:var(--subtle)}
+.connection-summary-copy>strong{font:750 16px Manrope,sans-serif;letter-spacing:-.3px}
+.connection-summary-copy>small{color:var(--muted);font-size:9px;line-height:1.4}
+.connection-summary-meta{display:flex;align-items:center;gap:12px;flex:none}
+.connection-summary-meta .service-status{padding:6px 9px;font-size:9px}
+.connection-chevron{display:grid;place-items:center;width:30px;height:30px;border:1px solid var(--line);border-radius:9px;color:var(--muted);font-size:17px;line-height:1;transition:transform .2s ease,background .2s ease}
+.connection-panel[open] .connection-chevron{transform:rotate(180deg);background:var(--surface-2)}
+.connection-body{padding:0 18px 18px;border-top:1px solid var(--line)}
+.connection-body .service-row:first-child{margin-top:14px}
+.connection-body .instagram-account-card{margin-top:10px}
+.connection-body .worker-note{margin-top:12px}
+.connection-body .worker-interval{margin-top:10px;padding-top:0}
+@media(max-width:1080px){.content-grid-single{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:820px){.content-grid-single .add-panel{width:100%}.connection-panel{margin-top:14px}.connection-panel>summary{min-height:68px;padding:12px 14px}.connection-summary-meta{gap:8px}.connection-summary-copy>strong{font-size:15px}.connection-summary-copy>small{font-size:9px}.connection-body{padding:0 13px 14px}}
+@media(max-width:430px){.connection-panel>summary{gap:9px;padding:11px}.connection-summary-copy>small{max-width:210px}.connection-summary-meta .service-status{padding:5px 7px;font-size:8px}.connection-chevron{width:28px;height:28px}}
+
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}

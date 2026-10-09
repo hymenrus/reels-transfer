@@ -226,7 +226,7 @@ function renderShell() {
             <article class="stat-card stat-done"><div class="stat-top"><span>Yayınlandı</span><span class="stat-icon">${icon('check', 18)}</span></div><strong id="stat-published">—</strong><small>Tamamlananlar</small></article>
             <article class="stat-card stat-failed"><div class="stat-top"><span>Kontrol gerekli</span><span class="stat-icon">${icon('alert', 18)}</span></div><strong id="stat-failed">—</strong><small>Hata alan içerikler</small></article>
           </section>
-          <section class="content-grid">
+          <section class="content-grid content-grid-single">
             <article class="panel add-panel" id="add-section">
               <div class="panel-heading"><div><span class="eyebrow">YENİ İÇERİK</span><h2>Kuyruğa Reel ekle</h2></div><span class="heading-icon">${icon('plus', 20)}</span></div>
               <p class="panel-copy">Her satıra bir Instagram Reel bağlantısı yaz. URL’leri ekleyince her bağlantı için hesap, açıklama ve kapak seçimi görünür. Ayrı açıklama alanı, bu sefer eklediğin tüm Reels'lere uygulanır.</p>
@@ -249,14 +249,6 @@ function renderShell() {
                 <button class="button button-primary button-wide" type="submit" id="add-submit">${icon('plus', 18)} Kuyruğa ekle <span class="button-arrow">→</span></button>
               </form>
               <div class="privacy-note">${icon('check', 15)} URL’ler başarıyla kuyruğa eklenince temizlenir; açıklama taslağın bu cihazda, kayıtlı şablonların hesabında bulutta saklanır. Instagram parolan burada istenmez.</div>
-            </article>
-            <article class="panel worker-panel" id="settings-section">
-              <div class="panel-heading"><div><span class="eyebrow">YAYIN DURUMU</span><h2>Bulut bağlantıları</h2></div><span class="connection-orb ${PUBLISHER_SETUP_READY ? 'is-ready' : ''}"><i></i></span></div>
-              <div class="service-row"><span class="service-logo supabase-logo">S</span><div><strong>Supabase</strong><small>Güvenli kuyruk ve oturum</small></div><span class="service-status good">Bağlı</span></div>
-              <div id="instagram-account-card" class="instagram-account-card"><span class="spinner"></span> Instagram bağlantısı kontrol ediliyor…</div>
-              <div class="service-row"><span class="service-logo github-logo">GH</span><div><strong>GitHub Actions</strong><small>Bilgisayar kapalıyken işlem</small></div><span class="service-status ${PUBLISHER_SETUP_READY ? 'good' : 'pending'}">${PUBLISHER_SETUP_READY ? 'Hazır' : 'Kurulum gerekli'}</span></div>
-              <div class="worker-note ${PUBLISHER_SETUP_READY ? 'note-ready' : ''}"><span class="note-icon">${PUBLISHER_SETUP_READY ? '✓' : 'i'}</span><p>${PUBLISHER_SETUP_READY ? 'Kuyruktaki içerikler bulut işçisi tarafından sırayla işleniyor.' : 'Arayüz ve kuyruk hazır. Otomatik yayın için GitHub Actions sırları ve Instagram API ayarları henüz bağlanmadı.'}</p></div>
-              <div class="worker-interval">${icon('clock', 16)} <span>Kuyrukta tarih/saat ayarı yok — eklenenler sırayla işlenir.</span></div>
             </article>
           </section>
           <section class="panel video-library-panel" id="video-library-section">
@@ -293,6 +285,19 @@ function renderShell() {
             <div id="queue-list" class="queue-list"><div class="loading-row"><span class="spinner"></span> Kuyruk yükleniyor…</div></div>
             <div id="queue-footer" class="queue-footer"></div>
           </section>
+          <details class="panel worker-panel connection-panel" id="settings-section">
+            <summary class="connection-summary">
+              <span class="connection-summary-copy"><span class="eyebrow">YAYIN DURUMU</span><strong>Bulut bağlantıları</strong><small>Instagram hesabı ve yayın altyapısı</small></span>
+              <span class="connection-summary-meta"><span class="service-status ${PUBLISHER_SETUP_READY ? 'good' : 'pending'}">${PUBLISHER_SETUP_READY ? 'Hazır' : 'İncele'}</span><span class="connection-chevron" aria-hidden="true">⌄</span></span>
+            </summary>
+            <div class="connection-body">
+              <div class="service-row"><span class="service-logo supabase-logo">S</span><div><strong>Supabase</strong><small>Güvenli kuyruk ve oturum</small></div><span class="service-status good">Bağlı</span></div>
+              <div id="instagram-account-card" class="instagram-account-card"><span class="spinner"></span> Instagram bağlantısı kontrol ediliyor…</div>
+              <div class="service-row"><span class="service-logo github-logo">GH</span><div><strong>GitHub Actions</strong><small>Bilgisayar kapalıyken işlem</small></div><span class="service-status ${PUBLISHER_SETUP_READY ? 'good' : 'pending'}">${PUBLISHER_SETUP_READY ? 'Hazır' : 'Kurulum gerekli'}</span></div>
+              <div class="worker-note ${PUBLISHER_SETUP_READY ? 'note-ready' : ''}"><span class="note-icon">${PUBLISHER_SETUP_READY ? '✓' : 'i'}</span><p>${PUBLISHER_SETUP_READY ? 'Kuyruktaki içerikler bulut işçisi tarafından sırayla işleniyor.' : 'Arayüz ve kuyruk hazır. Otomatik yayın için GitHub Actions sırları ve Instagram API ayarları henüz bağlanmadı.'}</p></div>
+              <div class="worker-interval">${icon('clock', 16)} <span>Kuyrukta tarih/saat ayarı yok — eklenenler sırayla işlenir.</span></div>
+            </div>
+          </details>
           <footer class="app-footer"><span>ReelFlow <span class="footer-dot">•</span> Mobil uyumlu web uygulaması</span><span>Instagram API üzerinden, iznin olan içerikler için</span></footer>
         </main>
         <nav class="mobile-nav" aria-label="Alt menü"><button class="mobile-nav-item active" data-scroll="top">${icon('grid', 20)}<span>Genel</span></button><button class="mobile-nav-item" data-scroll="queue-section">${icon('reel', 20)}<span>Kuyruk</span></button><button class="mobile-nav-item" data-scroll="video-library-section">${icon('play', 20)}<span>Arşiv</span></button><button class="mobile-nav-item" data-scroll="add-section">${icon('plus', 20)}<span>Ekle</span></button><button class="mobile-nav-item" data-scroll="settings-section">${icon('settings', 20)}<span>Durum</span></button></nav>
@@ -1783,7 +1788,10 @@ async function handleClick(event) {
   }
   if (button.dataset.scroll) {
     event.preventDefault();
-    document.getElementById(button.dataset.scroll)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const target = document.getElementById(button.dataset.scroll);
+    if (target?.tagName === 'DETAILS') target.open = true;
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    target?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
     document.querySelectorAll('.mobile-nav-item,.nav-item').forEach((node) => node.classList.toggle('active', node.dataset.scroll === button.dataset.scroll));
     return;
   }
