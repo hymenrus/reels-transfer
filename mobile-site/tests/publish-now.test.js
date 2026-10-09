@@ -107,32 +107,32 @@ test('per-URL cover selector stays visible on mobile before an Instagram account
   assert.match(source, /URL’leri ekleyince her bağlantı için hesap, açıklama ve kapak seçimi görünür/);
 });
 
-test('five dashboard sections are vertically ordered, independently collapsible, and the bottom dock is removed', () => {
-  const sectionIds = ['general-section', 'queue-section', 'video-library-section', 'add-section', 'settings-section'];
-  const sectionPositions = sectionIds.map((id) => source.indexOf(`id="${id}"`));
-  const queuePosition = sectionPositions[3];
-  const connectionPosition = sectionPositions[4];
-  const footerPosition = source.indexOf('<footer class="app-footer">');
-  const sideNavStart = source.indexOf('<nav class="side-nav"');
-  const sideNavEnd = source.indexOf('</nav>', sideNavStart);
-  const sideNav = source.slice(sideNavStart, sideNavEnd);
-  const navPositions = sectionIds.map((id) => sideNav.indexOf(`data-scroll="${id}"`));
+test('the original page layout is restored and the bottom quick navigation follows its section order', () => {
+  const pageIds = ['top', 'add-section', 'video-library-section', 'queue-section', 'settings-section'];
+  const pagePositions = pageIds.map((id) => source.indexOf(`id="${id}"`));
+  const mobileNavStart = source.indexOf('<nav class="mobile-nav"');
+  const mobileNavEnd = source.indexOf('</nav>', mobileNavStart);
+  const mobileNav = source.slice(mobileNavStart, mobileNavEnd);
+  const navPositions = pageIds.map((id) => mobileNav.indexOf(`data-scroll="${id}"`));
   const scrollStart = source.indexOf('if (button.dataset.scroll) {');
   const scrollEnd = source.indexOf('if (button.dataset.filter)', scrollStart);
   const scrollHandler = source.slice(scrollStart, scrollEnd);
+  const queuePosition = pagePositions[3];
+  const statusPosition = pagePositions[4];
+  const footerPosition = source.indexOf('<footer class="app-footer">');
 
-  assert.ok(sectionPositions.every((position, index) => position >= 0 && (index === 0 || position > sectionPositions[index - 1])));
+  assert.ok(pagePositions.every((position, index) => position >= 0 && (index === 0 || position > pagePositions[index - 1])));
   assert.ok(navPositions.every((position, index) => position >= 0 && (index === 0 || position > navPositions[index - 1])));
-  assert.ok(queuePosition >= 0 && connectionPosition > queuePosition && footerPosition > connectionPosition);
-  assert.ok(sectionIds.every((id) => source.includes(`id="${id}"`)));
-  assert.equal((source.match(/<details\b/g) || []).length, (source.match(/<\/details>/g) || []).length);
-  assert.equal((source.match(/<summary\b/g) || []).length, (source.match(/<\/summary>/g) || []).length);
-  assert.doesNotMatch(source, /<nav class="mobile-nav"/);
-  assert.match(scrollHandler, /if \(target\?\.tagName === 'DETAILS'\) target\.open = true/);
+  assert.equal((mobileNav.match(/class="mobile-nav-item/g) || []).length, 5);
+  assert.ok(queuePosition >= 0 && statusPosition > queuePosition && footerPosition > statusPosition);
+  assert.match(source, /class="content-grid content-grid-single"/);
+  assert.doesNotMatch(source, /<details class="panel dashboard-section/);
+  assert.match(scrollHandler, /target\?\.scrollIntoView/);
   assert.match(scrollHandler, /prefers-reduced-motion: reduce/);
-  assert.match(source, /connection-summary-meta/);
-  assert.match(styles, /\.dashboard-section>summary\.dashboard-section-summary/);
-  assert.match(styles, /\.section-disclosure-chevron/);
+  assert.match(scrollHandler, /querySelectorAll\('\.nav-item, \.mobile-nav-item'\)/);
+  assert.doesNotMatch(source, /caption-template-tags|data-video-tags|Hashtag|hashtag/);
+  assert.match(styles, /\.mobile-nav\{position:fixed/);
+  assert.match(styles, /\.mobile-nav-item\.active/);
   assert.match(styles, /@media\(max-width:820px\)/);
   assert.match(styles, /@media\(prefers-reduced-motion:reduce\)/);
 });
