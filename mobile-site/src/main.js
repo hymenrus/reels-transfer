@@ -190,7 +190,7 @@ function renderShell() {
         <a class="brand-lockup" href="#top" aria-label="ReelFlow ana sayfa"><span class="brand-mark">R</span><span>ReelFlow<span class="brand-sub">TRANSFER STUDIO</span></span></a>
         <div class="sidebar-label">ÇALIŞMA ALANI</div>
         <nav class="side-nav" aria-label="Ana menü">
-          <button class="nav-item active" data-scroll="top">${icon('grid')}<span>Genel bakış</span></button>
+          <button class="nav-item active" aria-current="location" data-scroll="top">${icon('grid')}<span>Genel bakış</span></button>
           <button class="nav-item" data-scroll="queue-section">${icon('reel')}<span>Reel kuyruğu</span><span id="nav-count" class="nav-count">0</span></button>
           <button class="nav-item" data-scroll="video-library-section">${icon('play')}<span>Video arşivi</span><span id="video-nav-count" class="nav-count">0</span></button>
           <button class="nav-item" data-scroll="settings-section">${icon('settings')}<span>Bağlantı durumu</span></button>
@@ -294,7 +294,7 @@ function renderShell() {
           </details>
           <footer class="app-footer"><span>ReelFlow <span class="footer-dot">•</span> Mobil uyumlu web uygulaması</span><span>Instagram API üzerinden, iznin olan içerikler için</span></footer>
         </main>
-        <nav class="mobile-nav" aria-label="Alt menü"><button class="mobile-nav-item active" data-scroll="top">${icon('grid', 20)}<span>Genel</span></button><button class="mobile-nav-item" data-scroll="add-section">${icon('plus', 20)}<span>Ekle</span></button><button class="mobile-nav-item" data-scroll="video-library-section">${icon('play', 20)}<span>Arşiv</span></button><button class="mobile-nav-item" data-scroll="queue-section">${icon('reel', 20)}<span>Kuyruk</span></button><button class="mobile-nav-item" data-scroll="settings-section">${icon('settings', 20)}<span>Durum</span></button></nav>
+        <nav class="mobile-nav" aria-label="Alt menü"><button class="mobile-nav-item active" aria-current="location" data-scroll="top">${icon('grid', 20)}<span>Genel</span></button><button class="mobile-nav-item" data-scroll="add-section">${icon('plus', 20)}<span>Ekle</span></button><button class="mobile-nav-item" data-scroll="video-library-section">${icon('play', 20)}<span>Arşiv</span></button><button class="mobile-nav-item" data-scroll="queue-section">${icon('reel', 20)}<span>Kuyruk</span></button><button class="mobile-nav-item" data-scroll="settings-section">${icon('settings', 20)}<span>Durum</span></button></nav>
       </div>
     </div>
     <div id="toast-host" class="toast-host" aria-live="polite"></div>`;
@@ -1776,7 +1776,16 @@ async function handleClick(event) {
     if (target?.tagName === 'DETAILS') target.open = true;
     const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     target?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
-    document.querySelectorAll('.nav-item, .mobile-nav-item').forEach((node) => node.classList.toggle('active', node.dataset.scroll === button.dataset.scroll));
+    ['.nav-item', '.mobile-nav-item'].forEach((selector) => {
+      const items = [...document.querySelectorAll(selector)];
+      if (!items.some((node) => node.dataset.scroll === button.dataset.scroll)) return;
+      items.forEach((node) => {
+        const active = node.dataset.scroll === button.dataset.scroll;
+        node.classList.toggle('active', active);
+        if (active) node.setAttribute('aria-current', 'location');
+        else node.removeAttribute('aria-current');
+      });
+    });
     return;
   }
   if (button.dataset.filter) {
