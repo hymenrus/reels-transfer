@@ -191,9 +191,9 @@ function renderShell() {
         <div class="sidebar-label">ÇALIŞMA ALANI</div>
         <nav class="side-nav" aria-label="Ana menü">
           <button class="nav-item active" data-scroll="general-section">${icon('grid')}<span>Genel</span></button>
-          <button class="nav-item" data-scroll="add-section">${icon('plus')}<span>Reel ekle</span></button>
-          <button class="nav-item" data-scroll="video-library-section">${icon('play')}<span>Arşiv</span><span id="video-nav-count" class="nav-count">0</span></button>
           <button class="nav-item" data-scroll="queue-section">${icon('reel')}<span>Kuyruk</span><span id="nav-count" class="nav-count">0</span></button>
+          <button class="nav-item" data-scroll="video-library-section">${icon('play')}<span>Arşiv</span><span id="video-nav-count" class="nav-count">0</span></button>
+          <button class="nav-item" data-scroll="add-section">${icon('plus')}<span>Reel ekle</span></button>
           <button class="nav-item" data-scroll="settings-section">${icon('settings')}<span>Durum</span></button>
         </nav>
         <div class="sidebar-bottom">
@@ -228,27 +228,13 @@ function renderShell() {
               </section>
             </div>
           </details>
-          <details class="panel dashboard-section add-panel" id="add-section" open>
-            <summary class="dashboard-section-summary"><span class="dashboard-section-title"><span class="eyebrow">YENİ İÇERİK</span><strong>Kuyruğa Reel ekle</strong><small>URL, hedef hesap, açıklama ve kapak seçimi</small></span><span class="section-disclosure-chevron" aria-hidden="true">⌄</span></summary>
-            <div class="dashboard-section-body add-section-body">
-              <p class="panel-copy">Her satıra bir Instagram Reel bağlantısı yaz. URL’leri ekleyince her bağlantı için hesap, açıklama ve kapak seçimi görünür. Ayrı açıklama alanı, bu sefer eklediğin tüm Reels'lere uygulanır.</p>
-              <form id="add-form">
-                <label class="sr-only" for="reel-input">Reel bağlantıları</label>
-                <textarea id="reel-input" rows="5" placeholder="https://www.instagram.com/reel/ABC123/&#10;https://www.instagram.com/reel/XYZ456/"></textarea>
-                <div class="input-meta"><span id="input-counter">0 bağlantı</span><button type="button" id="paste-button" class="text-button">Panodan yapıştır</button></div>
-                <section id="reel-target-panel" class="reel-target-panel" aria-live="polite" hidden></section>
-                <label for="caption-input">Paylaşım açıklaması <span class="muted">(isteğe bağlı, tüm Reels'lere uygulanır)</span></label>
-                <textarea id="caption-input" rows="3" maxlength="2200" placeholder="Bu sefer eklediğin Reels'ler için açıklama yaz…"></textarea>
-                <section class="caption-template-panel" aria-label="Açıklama şablonları">
-                  <div class="caption-template-heading"><strong>Kayıtlı açıklama şablonları</strong><small id="caption-template-status" class="caption-template-status" role="status" aria-live="polite">ReelFlow hesabı yükleniyor…</small></div>
-                  <div class="caption-template-select-row"><label class="sr-only" for="caption-template-select">Açıklama şablonu seç</label><select id="caption-template-select" disabled><option value="">Şablon seç…</option></select><button type="button" id="delete-caption-template" class="caption-template-delete" disabled>Seçileni sil</button></div>
-                  <div class="caption-template-save-row"><label class="sr-only" for="caption-template-name">Şablon adı</label><input id="caption-template-name" type="text" maxlength="60" placeholder="Şablon adı, ör. Kampanya" disabled /><button type="button" id="save-caption-template" class="button button-primary caption-template-save" disabled>Açıklamayı kaydet</button></div>
-                  <small class="caption-template-note">Şablonlar aynı ReelFlow hesabındaki tüm Instagram hesaplarında ortaktır.</small>
-                </section>
-                <label class="rights-check"><input type="checkbox" id="rights-confirm" /><span>Bu videoları paylaşma hakkım var veya izin aldım.</span></label>
-                <button class="button button-primary button-wide" type="submit" id="add-submit">${icon('plus', 18)} Kuyruğa ekle <span class="button-arrow">→</span></button>
-              </form>
-              <div class="privacy-note">${icon('check', 15)} URL’ler başarıyla kuyruğa eklenince temizlenir; açıklama taslağın bu cihazda, kayıtlı şablonların hesabında bulutta saklanır. Instagram parolan burada istenmez.</div>
+          <details class="panel dashboard-section queue-panel" id="queue-section" open>
+            <summary class="dashboard-section-summary"><span class="dashboard-section-title"><span class="eyebrow">İÇERİK MERKEZİ</span><strong>Reel kuyruğu <span id="queue-count" class="queue-count">0</span></strong><small>Yayın sırası, durumlar ve hata kontrolleri</small></span><span class="section-disclosure-chevron" aria-hidden="true">⌄</span></summary>
+            <div class="dashboard-section-body queue-section-body">
+            <div class="queue-tools"><div class="search-wrap">${icon('search', 17)}<input type="search" id="queue-search" placeholder="Kuyrukta ara" aria-label="Kuyrukta ara" /></div><button class="icon-button refresh-button" id="refresh-button" title="Yenile" aria-label="Kuyruğu yenile">${icon('refresh', 17)}</button></div>
+            <div class="filter-row" role="tablist" aria-label="Kuyruk filtresi"><button class="filter-chip active" data-filter="all">Tümü</button><button class="filter-chip" data-filter="queued">Kuyrukta</button><button class="filter-chip" data-filter="processing">Yayınlanıyor</button><button class="filter-chip" data-filter="published">Yayınlandı</button><button class="filter-chip" data-filter="unavailable">Instagram’da yok</button><button class="filter-chip" data-filter="failed">Hata</button></div>
+            <div id="queue-list" class="queue-list"><div class="loading-row"><span class="spinner"></span> Kuyruk yükleniyor…</div></div>
+            <div id="queue-footer" class="queue-footer"></div>
             </div>
           </details>
           <details class="panel dashboard-section video-library-panel" id="video-library-section" open>
@@ -281,13 +267,27 @@ function renderShell() {
             <div id="video-library-list" class="video-library-list"><div class="loading-row"><span class="spinner"></span> Video arşivi yükleniyor…</div></div>
             </div>
           </details>
-          <details class="panel dashboard-section queue-panel" id="queue-section" open>
-            <summary class="dashboard-section-summary"><span class="dashboard-section-title"><span class="eyebrow">İÇERİK MERKEZİ</span><strong>Reel kuyruğu <span id="queue-count" class="queue-count">0</span></strong><small>Yayın sırası, durumlar ve hata kontrolleri</small></span><span class="section-disclosure-chevron" aria-hidden="true">⌄</span></summary>
-            <div class="dashboard-section-body queue-section-body">
-            <div class="queue-tools"><div class="search-wrap">${icon('search', 17)}<input type="search" id="queue-search" placeholder="Kuyrukta ara" aria-label="Kuyrukta ara" /></div><button class="icon-button refresh-button" id="refresh-button" title="Yenile" aria-label="Kuyruğu yenile">${icon('refresh', 17)}</button></div>
-            <div class="filter-row" role="tablist" aria-label="Kuyruk filtresi"><button class="filter-chip active" data-filter="all">Tümü</button><button class="filter-chip" data-filter="queued">Kuyrukta</button><button class="filter-chip" data-filter="processing">Yayınlanıyor</button><button class="filter-chip" data-filter="published">Yayınlandı</button><button class="filter-chip" data-filter="unavailable">Instagram’da yok</button><button class="filter-chip" data-filter="failed">Hata</button></div>
-            <div id="queue-list" class="queue-list"><div class="loading-row"><span class="spinner"></span> Kuyruk yükleniyor…</div></div>
-            <div id="queue-footer" class="queue-footer"></div>
+          <details class="panel dashboard-section add-panel" id="add-section" open>
+            <summary class="dashboard-section-summary"><span class="dashboard-section-title"><span class="eyebrow">YENİ İÇERİK</span><strong>Kuyruğa Reel ekle</strong><small>URL, hedef hesap, açıklama ve kapak seçimi</small></span><span class="section-disclosure-chevron" aria-hidden="true">⌄</span></summary>
+            <div class="dashboard-section-body add-section-body">
+              <p class="panel-copy">Her satıra bir Instagram Reel bağlantısı yaz. URL’leri ekleyince her bağlantı için hesap, açıklama ve kapak seçimi görünür. Ayrı açıklama alanı, bu sefer eklediğin tüm Reels'lere uygulanır.</p>
+              <form id="add-form">
+                <label class="sr-only" for="reel-input">Reel bağlantıları</label>
+                <textarea id="reel-input" rows="5" placeholder="https://www.instagram.com/reel/ABC123/&#10;https://www.instagram.com/reel/XYZ456/"></textarea>
+                <div class="input-meta"><span id="input-counter">0 bağlantı</span><button type="button" id="paste-button" class="text-button">Panodan yapıştır</button></div>
+                <section id="reel-target-panel" class="reel-target-panel" aria-live="polite" hidden></section>
+                <label for="caption-input">Paylaşım açıklaması <span class="muted">(isteğe bağlı, tüm Reels'lere uygulanır)</span></label>
+                <textarea id="caption-input" rows="3" maxlength="2200" placeholder="Bu sefer eklediğin Reels'ler için açıklama yaz…"></textarea>
+                <section class="caption-template-panel" aria-label="Açıklama şablonları">
+                  <div class="caption-template-heading"><strong>Kayıtlı açıklama şablonları</strong><small id="caption-template-status" class="caption-template-status" role="status" aria-live="polite">ReelFlow hesabı yükleniyor…</small></div>
+                  <div class="caption-template-select-row"><label class="sr-only" for="caption-template-select">Açıklama şablonu seç</label><select id="caption-template-select" disabled><option value="">Şablon seç…</option></select><button type="button" id="delete-caption-template" class="caption-template-delete" disabled>Seçileni sil</button></div>
+                  <div class="caption-template-save-row"><label class="sr-only" for="caption-template-name">Şablon adı</label><input id="caption-template-name" type="text" maxlength="60" placeholder="Şablon adı, ör. Kampanya" disabled /><button type="button" id="save-caption-template" class="button button-primary caption-template-save" disabled>Açıklamayı kaydet</button></div>
+                  <small class="caption-template-note">Şablonlar aynı ReelFlow hesabındaki tüm Instagram hesaplarında ortaktır.</small>
+                </section>
+                <label class="rights-check"><input type="checkbox" id="rights-confirm" /><span>Bu videoları paylaşma hakkım var veya izin aldım.</span></label>
+                <button class="button button-primary button-wide" type="submit" id="add-submit">${icon('plus', 18)} Kuyruğa ekle <span class="button-arrow">→</span></button>
+              </form>
+              <div class="privacy-note">${icon('check', 15)} URL’ler başarıyla kuyruğa eklenince temizlenir; açıklama taslağın bu cihazda, kayıtlı şablonların hesabında bulutta saklanır. Instagram parolan burada istenmez.</div>
             </div>
           </details>
           <details class="panel dashboard-section worker-panel connection-panel" id="settings-section">

@@ -108,7 +108,7 @@ test('per-URL cover selector stays visible on mobile before an Instagram account
 });
 
 test('five dashboard sections are vertically ordered, independently collapsible, and the bottom dock is removed', () => {
-  const sectionIds = ['general-section', 'add-section', 'video-library-section', 'queue-section', 'settings-section'];
+  const sectionIds = ['general-section', 'queue-section', 'video-library-section', 'add-section', 'settings-section'];
   const sectionPositions = sectionIds.map((id) => source.indexOf(`id="${id}"`));
   const queuePosition = sectionPositions[3];
   const connectionPosition = sectionPositions[4];
